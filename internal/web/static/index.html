@@ -54,9 +54,9 @@
       </button>
 
       <nav class="navList">
-        <button class="navItem"><svg width="14" height="14"><use href="#i-plug"/></svg><span>插件</span></button>
-        <button class="navItem"><svg width="14" height="14"><use href="#i-clock"/></svg><span>自动化任务</span></button>
-        <button class="navItem"><svg width="14" height="14"><use href="#i-grid"/></svg><span>更多</span></button>
+        <button class="navItem" id="navPlugins"><svg width="14" height="14"><use href="#i-plug"/></svg><span>插件</span></button>
+        <button class="navItem" id="navAutos" disabled><svg width="14" height="14"><use href="#i-clock"/></svg><span>自动化任务</span></button>
+        <button class="navItem" id="navMore" disabled><svg width="14" height="14"><use href="#i-grid"/></svg><span>更多</span></button>
       </nav>
 
       <div class="wsSection">
@@ -73,7 +73,7 @@
     </div>
 
     <div class="sidebarFoot">
-      <button class="navItem"><svg width="14" height="14"><use href="#i-dots"/></svg><span>更多</span></button>
+      <button class="navItem" disabled><svg width="14" height="14"><use href="#i-dots"/></svg><span>更多</span></button>
     </div>
   </aside>
 
@@ -135,6 +135,14 @@
       <div class="statsBar" id="statsBar"></div>
     </div>
   </main>
+
+  <aside class="drawer" id="drawer" aria-label="能力与环境">
+    <div class="drawerHead">
+      <span class="drawerTitle">能力与环境</span>
+      <button class="iconBtn sm" id="drawerClose" title="关闭"><svg width="14" height="14"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="drawerBody" id="drawerBody"></div>
+  </aside>
 </div>
 
 <div class="toastLayer" id="toastLayer"></div>

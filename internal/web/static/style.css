@@ -1107,6 +1107,83 @@ svg { display: block; }
 }
 .permDesc { font-size: 11.5px; color: var(--label-secondary); line-height: 1.5; }
 
+/* ---------- right drawer（能力与环境） ---------- */
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 380px;
+  max-width: 92vw;
+  height: 100vh;
+  background: var(--bg-raised);
+  border-left: 1px solid var(--border-l2);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(102%);
+  transition: transform 0.22s var(--ease);
+  z-index: 40;
+}
+.drawer[data-open="true"] { transform: none; }
+/* 面板打开时压缩中栏，而不是让面板浮在输入区上面 */
+.centerCol { transition: margin-right 0.22s var(--ease); }
+.frame[data-drawer="true"] .centerCol { margin-right: min(380px, 92vw); }
+.drawerHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-l2);
+  flex: 0 0 auto;
+}
+.drawerTitle { font-size: 13px; font-weight: 600; }
+.drawerBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 24px;
+}
+.drawerSection { margin-bottom: 18px; }
+.drawerSectionHead {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--label-tertiary);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.toolCard {
+  border: 1px solid var(--border-l2);
+  border-radius: var(--radius-m);
+  padding: 9px 11px;
+  margin-bottom: 6px;
+}
+.toolCardName { font-size: 12.5px; font-weight: 600; margin-bottom: 3px; }
+.toolCardDesc { font-size: 11.5px; color: var(--label-secondary); line-height: 1.55; }
+.skillCard {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--border-l2);
+  border-radius: var(--radius-m);
+  padding: 9px 11px;
+  margin-bottom: 6px;
+}
+.skillCardName { font-size: 12.5px; font-weight: 600; }
+.skillCardDesc { font-size: 11.5px; color: var(--label-secondary); line-height: 1.55; }
+.diagBox {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--label-secondary);
+  border: 1px solid var(--border-l2);
+  border-radius: var(--radius-m);
+  padding: 10px 11px;
+  background: var(--bg-base);
+}
+.navItem[disabled] { opacity: 0.45; cursor: default; }
+.navItem[disabled]:hover { background: transparent; color: inherit; }
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 1024px) {

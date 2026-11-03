@@ -96,6 +96,7 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	mux.HandleFunc("POST /api/stop", w.handleStop)
 	mux.HandleFunc("POST /api/settings", w.handleSettings)
 	mux.HandleFunc("GET /api/permission", w.handlePermissionGet)
+	mux.HandleFunc("GET /api/tools", w.handleTools)
 	mux.HandleFunc("POST /api/permission", w.handlePermissionSet)
 	mux.HandleFunc("GET /api/workspace/browse", w.handleBrowse)
 	mux.HandleFunc("POST /api/workspace", w.handleSetWorkspace)
@@ -380,6 +381,49 @@ func (w *webAPI) wsRoot() string {
 		return ws.Root()
 	}
 	return "."
+}
+
+// ---------- tools / skills ----------
+
+// handleTools GET → 工具规格 + 技能列表 + 运行诊断。
+// 存在的理由：模型有哪些能力、当前环境是什么样，不该只能靠 -tools flag
+// 在终端里看——Web 侧同样要能回答「它到底能干什么」。
+func (w *webAPI) handleTools(rw http.ResponseWriter, _ *http.Request) {
+	specs := []api.ToolSpec{}
+	if w.reg != nil {
+		specs = w.reg.Specs()
+	}
+	toolsOut := make([]map[string]any, 0, len(specs))
+	for _, sp := range specs {
+		toolsOut = append(toolsOut, map[string]any{
+			"name":        sp.Name,
+			"description": sp.Description,
+			"parameters":  sp.Parameters,
+		})
+	}
+
+	skillsOut := []map[string]string{}
+	if s, err := kernel.Use[*tools.SkillRegistry](w.k, "skills"); err == nil && s != nil {
+		for _, sk := range s.List() {
+			skillsOut = append(skillsOut, map[string]string{
+				"name":        sk.Name,
+				"description": sk.Description,
+			})
+		}
+	}
+
+	diag := ""
+	if f, err := kernel.Use[func() string](w.k, "toolInfo"); err == nil && f != nil {
+		diag = f()
+	}
+
+	writeJSON(rw, map[string]any{
+		"tools":      toolsOut,
+		"skills":     skillsOut,
+		"diag":       diag,
+		"permission": w.permName(),
+		"workspace":  w.wsRoot(),
+	})
 }
 
 // ---------- permission ----------

@@ -820,7 +820,69 @@
       toast('读取失败：' + e.message, 'error');
     }
   };
-  $('#btnRight').onclick = () => toast('右侧面板待接入');
+  // ---------- drawer：能力与环境 ----------
+  //
+  // 工具规格、技能、运行诊断都在这里。它回答的是「它到底能干什么、
+  // 现在跑在什么环境里」——这类信息不该只能靠 -tools 在终端看。
+
+  const drawer = $('#drawer');
+
+  function setDrawer(open) {
+    drawer.dataset.open = open ? 'true' : 'false';
+    // 面板是挤压布局，不是盖在输入区上的浮层
+    frame.dataset.drawer = open ? 'true' : 'false';
+  }
+
+  async function openDrawer() {
+    setDrawer(true);
+    const body = $('#drawerBody');
+    if (body.dataset.loaded === '1') return;
+    body.innerHTML = '';
+    body.appendChild(el('div', 'drawerLoading', '加载中…'));
+    try {
+      const d = await api('/api/tools');
+      body.dataset.loaded = '1';
+      body.innerHTML = '';
+
+      const toolsSec = el('div', 'drawerSection');
+      toolsSec.appendChild(el('div', 'drawerSectionHead', '工具 · ' + (d.tools || []).length));
+      (d.tools || []).forEach((t) => {
+        const card = el('div', 'toolCard');
+        card.appendChild(el('div', 'toolCardName', t.name));
+        card.appendChild(el('div', 'toolCardDesc', t.description || ''));
+        toolsSec.appendChild(card);
+      });
+      body.appendChild(toolsSec);
+
+      const skillsSec = el('div', 'drawerSection');
+      skillsSec.appendChild(el('div', 'drawerSectionHead', '技能 · ' + (d.skills || []).length));
+      if (!(d.skills || []).length) {
+        skillsSec.appendChild(el('div', 'toolCardDesc', '（skills 目录里还没有 SKILL.md）'));
+      }
+      (d.skills || []).forEach((sk) => {
+        const card = el('div', 'skillCard');
+        card.appendChild(el('div', 'skillCardName', sk.name));
+        if (sk.description) card.appendChild(el('div', 'skillCardDesc', sk.description));
+        skillsSec.appendChild(card);
+      });
+      body.appendChild(skillsSec);
+
+      const diagSec = el('div', 'drawerSection');
+      diagSec.appendChild(el('div', 'drawerSectionHead', '运行诊断'));
+      diagSec.appendChild(el('div', 'diagBox', d.diag || '（无诊断信息）'));
+      body.appendChild(diagSec);
+    } catch (e) {
+      body.innerHTML = '';
+      body.appendChild(el('div', 'drawerLoading', '加载失败：' + e.message));
+    }
+  }
+
+  $('#btnRight').onclick = () => {
+    if (drawer.dataset.open === 'true') setDrawer(false);
+    else openDrawer();
+  };
+  $('#drawerClose').onclick = () => setDrawer(false);
+  $('#navPlugins').onclick = openDrawer;
 
   // ---------- permission ----------
 

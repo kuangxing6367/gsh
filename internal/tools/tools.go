@@ -141,6 +141,8 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 		return fmt.Errorf("tools: 加载技能失败: %w", err)
 	}
 	p.skills = skills
+	// 技能目录也是运行期能力：Web 侧的「工具/技能」面板要能列出它们。
+	ctx.Provide("skills", skills)
 
 	all := []api.Tool{
 		bt,
