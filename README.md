@@ -246,14 +246,15 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 
 ## 终端 UI（TUI）
 
-`./gsh.exe -tui` 启动 opencode 风格终端界面（bubbletea 实现，视觉 1:1 对齐 opencode 的暗色语言）：
+`./gsh.exe -tui` 启动 opencode 风格终端界面（bubbletea 实现；布局与配色按 opencode dev 分支实际截图对齐，不是凭印象的「暗色 + 绿色」）。
 
-- 近黑画布 `#080808` + 磷光绿强调 `#50fa7b` + 等宽硬边（Dracula 系配色）
-- **顶栏**：品牌 + 会话 id + 运行态
-- **消息区**：用户气泡（绿色 `›` 前缀）、助手流式回复、工具行（`✓/✗` 状态 + 摘要）
-- **底栏**：输入框（`›` 提示符，Enter 发送 / Shift+Enter 换行）
-- 交互：Enter 发送、Esc 停止当前轮、Ctrl+C 退出
+- 配色（截图采样）：画布 `#0a0a0a`、元素 `#141414`、输入框 `#1e1e1e`、正文 `#e8e8e8`、次级 `#909090`、边框 `#3a3a3a`、强调蓝 `#5898f0`
+- **顶部**：圆角标题条，`# 会话标题` 左、`session xxxx` 右
+- **消息区**：用户消息为「左侧蓝色竖条 + 浅色底块」（不是行内气泡）；助手为普通段落；工具行为 `* Tool args (n)`，读类工具用 `→ Read path`（无 ✓/✗ 图标）
+- **底栏**：`◆ 模式 · 模型` 徽标 → 带蓝色左边条的圆角输入框 → `模式 模型 provider` 行 → 键位提示条（`enter 发送` / `shift+enter 换行` / `ctrl+c 退出`，运行中显示 `esc 停止`）
+- 交互：Enter 发送、Shift+Enter 换行、Esc 停止当前轮、Ctrl+C 退出
 - 复用内核的 `loop.RunSession`：流式 delta 与 `tool_call/tool_result` 事件经 channel 回流，逐字流与工具行实时更新——TUI 只是 loop 的新展示面，与 Web UI、REPL 对等
+- 已知差距：助手消息目前按纯文本显示，未做 markdown 渲染（标题/粗体/代码块会保留原标记）
 
 ## 操作审计日志
 
