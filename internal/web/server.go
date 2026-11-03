@@ -1,15 +1,18 @@
 // Package web WebUI 插件：HTTP 服务 + SSE 流式对话 + 会话管理。
-// 前端 embed 进二进制，保持单文件分发。
+// 前端 embed 进二进制，保持单文件分发；API 面按 DSH Web UI 的交互需要设计。
 package web
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+
 	"sync"
+	"time"
 
 	"gsh/internal/api"
 	"gsh/internal/kernel"
@@ -23,9 +26,8 @@ func RegisterKernel(k *kernel.Kernel) error { return k.Load(&Plugin{}) }
 
 // Plugin web 插件。
 type Plugin struct {
-	mu     sync.Mutex
-	srv    *http.Server
-	logSeq int
+	mu  sync.Mutex
+	srv *http.Server
 }
 
 // Name 实现 kernel.Plugin。
@@ -70,71 +72,101 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	if err != nil {
 		return err
 	}
+	reg, _ := kernel.Use[api.ToolRegistry](k, "toolRegistry")
 
-	w := &webAPI{loop: loopSvc, store: store}
-	mux.HandleFunc("POST /api/chat", w.handleChat)
+	w := &webAPI{
+		k:     k,
+		loop:  loopSvc,
+		store: store,
+		reg:   reg,
+		runs:  map[string]context.CancelFunc{},
+	}
+	mux.HandleFunc("GET /api/state", w.handleState)
 	mux.HandleFunc("GET /api/sessions", w.handleSessions)
 	mux.HandleFunc("GET /api/session", w.handleSessionDetail)
+	mux.HandleFunc("POST /api/session/new", w.handleSessionNew)
+	mux.HandleFunc("POST /api/session/delete", w.handleSessionDelete)
+	mux.HandleFunc("POST /api/chat", w.handleChat)
+	mux.HandleFunc("POST /api/stop", w.handleStop)
 
 	srv := &http.Server{Addr: s.addr, Handler: mux}
 	return srv.ListenAndServe()
 }
 
 type webAPI struct {
+	k     *kernel.Kernel
 	loop  api.Loop
 	store api.SessionStore
+	reg   api.ToolRegistry
+
+	mu   sync.Mutex
+	runs map[string]context.CancelFunc
 }
 
-// handleChat POST {prompt} → SSE 流式返回 delta/tool_call/tool_result/final/error 事件。
-func (w *webAPI) handleChat(rw http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Prompt string `json:"prompt"`
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err == nil {
-		_ = json.Unmarshal(body, &req)
-	}
-	if req.Prompt == "" {
-		httpError(rw, http.StatusBadRequest, "prompt is required")
-		return
-	}
-	flusher, ok := rw.(http.Flusher)
-	if !ok {
-		httpError(rw, http.StatusInternalServerError, "streaming unsupported")
-		return
-	}
-	rw.Header().Set("Content-Type", "text/event-stream")
-	rw.Header().Set("Cache-Control", "no-cache")
-	rw.Header().Set("X-Accel-Buffering", "no")
+// ---------- state ----------
 
-	send := func(event string, data any) {
-		b, _ := json.Marshal(data)
-		fmt.Fprintf(rw, "event: %s\ndata: %s\n\n", event, b)
-		flusher.Flush()
-	}
-
-	ctx := r.Context()
-	_, runErr := w.loop.RunTraced(ctx, req.Prompt,
-		func(delta string) { send("delta", map[string]string{"text": delta}) },
-		func(ev api.Event) { send(string(ev.Kind), ev) },
-	)
-	if runErr != nil {
-		send("error", map[string]string{"message": runErr.Error()})
-	}
-	send("done", map[string]any{})
-}
-
-// handleSessions GET → 会话 ID 列表（新→旧）。
-func (w *webAPI) handleSessions(rw http.ResponseWriter, r *http.Request) {
-	ids, err := w.store.List()
+// handleState GET → 首屏所需的全部信息。
+func (w *webAPI) handleState(rw http.ResponseWriter, r *http.Request) {
+	metas, err := w.store.ListMeta()
 	if err != nil {
 		httpError(rw, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if ids == nil {
-		ids = []string{}
+	writeJSON(rw, map[string]any{
+		"model":     w.llmString("model"),
+		"provider":  w.llmString("provider"),
+		"base_url":  w.llmString("base_url"),
+		"workspace": w.toolString("workspace"),
+		"tools":     w.toolNames(),
+		"sessions":  metas,
+		"now":       time.Now().Format(time.RFC3339),
+	})
+}
+
+func (w *webAPI) llmString(key string) string {
+	if w.k == nil {
+		return ""
 	}
-	writeJSON(rw, map[string]any{"sessions": ids})
+	if cfg, ok := w.k.Options("llm"); ok {
+		if v, ok := cfg[key].(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+func (w *webAPI) toolString(key string) string {
+	if w.k == nil {
+		return ""
+	}
+	if cfg, ok := w.k.Options("tools"); ok {
+		if v, ok := cfg[key].(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+func (w *webAPI) toolNames() []string {
+	if w.reg == nil {
+		return []string{}
+	}
+	return w.reg.Names()
+}
+
+// ---------- sessions ----------
+
+// handleSessions GET → 会话摘要列表（新→旧）。
+func (w *webAPI) handleSessions(rw http.ResponseWriter, r *http.Request) {
+	metas, err := w.store.ListMeta()
+	if err != nil {
+		httpError(rw, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if metas == nil {
+		metas = []api.SessionMeta{}
+	}
+	writeJSON(rw, map[string]any{"sessions": metas})
 }
 
 // handleSessionDetail GET ?id=xxx → 会话全部消息。
@@ -155,6 +187,118 @@ func (w *webAPI) handleSessionDetail(rw http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(rw, map[string]any{"id": sess.ID(), "messages": msgs})
 }
+
+// handleSessionNew POST → 新建空会话。
+func (w *webAPI) handleSessionNew(rw http.ResponseWriter, r *http.Request) {
+	sess, err := w.store.New()
+	if err != nil {
+		httpError(rw, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(rw, map[string]any{"id": sess.ID()})
+}
+
+// handleSessionDelete POST {id} → 删除会话（真删）。
+func (w *webAPI) handleSessionDelete(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	_ = json.Unmarshal(body, &req)
+	if req.ID == "" {
+		httpError(rw, http.StatusBadRequest, "id is required")
+		return
+	}
+	if err := w.store.Delete(req.ID); err != nil {
+		httpError(rw, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(rw, map[string]any{"ok": true})
+}
+
+// ---------- chat ----------
+
+// handleChat POST {prompt, session_id, run_id} → SSE。
+func (w *webAPI) handleChat(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Prompt    string `json:"prompt"`
+		SessionID string `json:"session_id"`
+		RunID     string `json:"run_id"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	if err == nil {
+		_ = json.Unmarshal(body, &req)
+	}
+	if req.Prompt == "" {
+		httpError(rw, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	flusher, ok := rw.(http.Flusher)
+	if !ok {
+		httpError(rw, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	rw.Header().Set("Content-Type", "text/event-stream")
+	rw.Header().Set("Cache-Control", "no-cache")
+	rw.Header().Set("X-Accel-Buffering", "no")
+
+	var writeMu sync.Mutex
+	send := func(event string, data any) {
+		b, _ := json.Marshal(data)
+		writeMu.Lock()
+		fmt.Fprintf(rw, "event: %s\ndata: %s\n\n", event, b)
+		flusher.Flush()
+		writeMu.Unlock()
+	}
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	if req.RunID != "" {
+		w.mu.Lock()
+		w.runs[req.RunID] = cancel
+		w.mu.Unlock()
+		defer func() {
+			w.mu.Lock()
+			delete(w.runs, req.RunID)
+			w.mu.Unlock()
+		}()
+	}
+
+	send("start", map[string]any{"session_id": req.SessionID, "run_id": req.RunID})
+
+	_, runErr := w.loop.RunSession(ctx, req.SessionID, req.Prompt,
+		func(delta string) { send("delta", map[string]string{"text": delta}) },
+		func(ev api.Event) { send(string(ev.Kind), ev) },
+	)
+	if runErr != nil {
+		if ctx.Err() != nil {
+			send("stopped", map[string]string{"message": "已被用户停止"})
+		} else {
+			send("error", map[string]string{"message": runErr.Error()})
+		}
+	}
+	send("done", map[string]any{})
+}
+
+// handleStop POST {run_id} → 取消正在跑的一轮。
+func (w *webAPI) handleStop(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RunID string `json:"run_id"`
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	_ = json.Unmarshal(body, &req)
+	w.mu.Lock()
+	cancel, ok := w.runs[req.RunID]
+	w.mu.Unlock()
+	if !ok {
+		httpError(rw, http.StatusNotFound, "run not found")
+		return
+	}
+	cancel()
+	writeJSON(rw, map[string]any{"ok": true})
+}
+
+// ---------- helpers ----------
 
 func writeJSON(rw http.ResponseWriter, v any) {
 	rw.Header().Set("Content-Type", "application/json; charset=utf-8")

@@ -113,6 +113,71 @@ func (s *store) Fork(id string) (api.Session, error) {
 	return neu, nil
 }
 
+// ListMeta 返回带标题/时间/消息数的会话列表（新→旧）。
+//
+// 标题不单独存元数据文件：会话本身就是 append-only JSONL，
+// 首条 user 消息就是「用户想干什么」最诚实的概括，算出来比另存一份更难失真。
+func (s *store) ListMeta() ([]api.SessionMeta, error) {
+	ids, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]api.SessionMeta, 0, len(ids))
+	for _, id := range ids {
+		meta := api.SessionMeta{ID: id, Title: "新会话"}
+		if fi, err := os.Stat(s.path(id)); err == nil {
+			meta.Updated = fi.ModTime()
+		}
+		f, err := os.Open(s.path(id))
+		if err != nil {
+			out = append(out, meta)
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if line == "" {
+				continue
+			}
+			meta.Messages++
+			if meta.Title != "新会话" {
+				continue
+			}
+			var m api.Message
+			if json.Unmarshal([]byte(line), &m) == nil && m.Role == api.RoleUser && strings.TrimSpace(m.Content) != "" {
+				meta.Title = summarize(m.Content)
+			}
+		}
+		f.Close()
+		out = append(out, meta)
+	}
+	return out, nil
+}
+
+// summarize 把首条用户消息压成一行标题。
+func summarize(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	const max = 42
+	if len([]rune(s)) <= max {
+		return s
+	}
+	return string([]rune(s)[:max]) + "…"
+}
+
+// Delete 删除会话文件。不做归档——删就是删。
+func (s *store) Delete(id string) error {
+	if !validID(id) {
+		return fmt.Errorf("session: bad id %q", id)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.Remove(s.path(id)); err != nil {
+		return fmt.Errorf("session: delete %s: %w", id, err)
+	}
+	return nil
+}
+
 // session 单个会话。
 type session struct {
 	id      string

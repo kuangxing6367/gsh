@@ -38,6 +38,14 @@ func (l *agentLoop) Run(ctx context.Context, userText string, onDelta api.Stream
 
 // RunTraced 执行一次完整 agent 循环；onEvent 非 nil 时回调 tool_call/tool_result/final 事件。
 func (l *agentLoop) RunTraced(ctx context.Context, userText string, onDelta api.StreamDelta, onEvent api.EventHandler) (string, error) {
+	return l.RunSession(ctx, "", userText, onDelta, onEvent)
+}
+
+// RunSession 在指定会话里执行一轮；sessionID 为空时沿用进程内默认会话。
+//
+// 为什么需要显式 sessionID：Web UI 的会话列表可以同时开多个会话，
+// 若仍用「全局 activeSession」，用户在 A 会话里问一句会写进 B 的文件。
+func (l *agentLoop) RunSession(ctx context.Context, sessionID string, userText string, onDelta api.StreamDelta, onEvent api.EventHandler) (string, error) {
 	k := kernel.Current
 	if k == nil {
 		return "", fmt.Errorf("loop: kernel not bound")
@@ -54,16 +62,39 @@ func (l *agentLoop) RunTraced(ctx context.Context, userText string, onDelta api.
 	if err != nil {
 		return "", err
 	}
-	sessv := k.Value("activeSession")
-	sess, ok := sessv.(api.Session)
-	if !ok || sess == nil {
-		sess, err = store.New()
+
+	var sess api.Session
+	if sessionID != "" {
+		sess, err = store.Open(sessionID)
 		if err != nil {
 			return "", err
 		}
-		k.SetValue("activeSession", sess)
+	} else {
+		sessv := k.Value("activeSession")
+		if s, ok := sessv.(api.Session); ok && s != nil {
+			sess = s
+		} else {
+			sess, err = store.New()
+			if err != nil {
+				return "", err
+			}
+			k.SetValue("activeSession", sess)
+		}
 	}
 
+	return l.run(ctx, sess, reg, model, userText, onDelta, onEvent)
+}
+
+// run 循环本体：与「会话从哪来」解耦，便于 CLI/Web 共用。
+func (l *agentLoop) run(
+	ctx context.Context,
+	sess api.Session,
+	reg api.ToolRegistry,
+	model api.LLM,
+	userText string,
+	onDelta api.StreamDelta,
+	onEvent api.EventHandler,
+) (string, error) {
 	if err := sess.Append(api.Message{Role: api.RoleUser, Content: userText}); err != nil {
 		return "", err
 	}
@@ -87,9 +118,9 @@ func (l *agentLoop) RunTraced(ctx context.Context, userText string, onDelta api.
 			return assistant.Content, nil // 最终回复
 		}
 		for _, call := range assistant.ToolCalls {
-			emit(api.Event{Kind: api.EventToolCall, Name: call.Name, Args: call.Args})
+			emit(api.Event{Kind: api.EventToolCall, ID: call.ID, Name: call.Name, Args: call.Args})
 			res := reg.Execute(ctx, call)
-			emit(api.Event{Kind: api.EventToolResult, Name: res.Name, Data: res.Content})
+			emit(api.Event{Kind: api.EventToolResult, ID: res.CallID, Name: res.Name, Data: res.Content, Err: res.IsError})
 			if err := sess.Append(api.Message{
 				Role:       api.RoleTool,
 				Content:    res.Content,

@@ -1,39 +1,138 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>gsh — agent harness</title>
+<title>gsh · agent harness</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="app">
-  <aside id="sidebar">
-    <div class="brand">
-      <span class="brand-mark">✦</span>
-      <span class="brand-name">gsh</span>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-send" viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4.5" y="4.5" width="7" height="7" rx="1.5" fill="currentColor"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M6.2 3v10" stroke="currentColor" stroke-width="1.3"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="m10 10 3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 16 16"><path d="M3 4.5h10M5 8h6M6.5 11.5h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></symbol>
+    <symbol id="i-folder-plus" viewBox="0 0 16 16"><path d="M2 5.2A1.7 1.7 0 0 1 3.7 3.5h2.1l1.3 1.5h4.2A1.7 1.7 0 0 1 13 6.7v4.6a1.7 1.7 0 0 1-1.7 1.7H3.7A1.7 1.7 0 0 1 2 11.3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M7.5 8v3M6 9.5h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 16 16"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.2a3.5 3.5 0 0 1-7 0zM8 11v2.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.4" stroke="currentColor" stroke-width="1.25" fill="none"/><path d="M8 5.2V8l2 1.2" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 16 16"><rect x="2.6" y="2.6" width="4.2" height="4.2" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><rect x="9.2" y="2.6" width="4.2" height="4.2" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><rect x="2.6" y="9.2" width="4.2" height="4.2" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/><rect x="9.2" y="9.2" width="4.2" height="4.2" rx="1" stroke="currentColor" stroke-width="1.2" fill="none"/></symbol>
+    <symbol id="i-dots" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.5" cy="8" r="1.1" fill="currentColor"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 16 16"><path d="m4.5 6.5 3.5 3.5 3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 16 16"><path d="M8 2.2 12.6 4v3.9c0 2.6-1.9 4.6-4.6 5.9-2.7-1.3-4.6-3.3-4.6-5.9V4z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-file" viewBox="0 0 16 16"><path d="M4 2.6h5l3 3v7.8H4z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M9 2.6v3h3" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" stroke="currentColor" stroke-width="1.2" fill="none"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-x" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7M11.5 4.5l-7 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 16 16"><path d="M8 2.2c.5 2.6 1.6 3.7 4.2 4.2-2.6.5-3.7 1.6-4.2 4.2-.5-2.6-1.6-3.7-4.2-4.2C6.4 5.9 7.5 4.8 8 2.2Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 16 16"><rect x="2.2" y="3" width="11.6" height="10" rx="2" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="m5 7 1.8 1.6L5 10.2M8.6 10.4h2.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+  </defs>
+</svg>
+
+<div class="frame" id="frame" data-view="empty">
+  <aside class="sidebar" id="sidebar">
+    <div class="topStrip">
+      <div class="brand">
+        <svg class="brandMark" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2.6c1.3 4.6 3.4 6.7 8 8-4.6 1.3-6.7 3.4-8 8-1.3-4.6-3.4-6.7-8-8 4.6-1.3 6.7-3.4 8-8Z" fill="currentColor"/>
+        </svg>
+        <span class="wordmark">gsh</span>
+        <span class="brandBadge">HARNESS</span>
+      </div>
+      <button class="iconBtn" id="collapseBtn" title="收起侧栏" aria-label="收起侧栏">
+        <svg viewBox="0 0 16 16" width="15" height="15"><rect x="2" y="3" width="12" height="10" rx="2" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M6.2 3v10" stroke="currentColor" stroke-width="1.3"/></svg>
+      </button>
     </div>
-    <button id="newSession" class="btn-new">＋ 新会话</button>
-    <nav id="sessionList"></nav>
-    <div class="sidebar-foot">
-      <span id="providerTag">…</span>
+
+    <div class="sidebarScroll">
+      <button class="newSessionBtn" id="newSessionBtn">
+        <svg width="14" height="14"><use href="#i-plus"/></svg>
+        <span>新会话</span>
+        <kbd>Ctrl Alt N</kbd>
+      </button>
+
+      <nav class="navList">
+        <button class="navItem"><svg width="14" height="14"><use href="#i-plug"/></svg><span>插件</span></button>
+        <button class="navItem"><svg width="14" height="14"><use href="#i-clock"/></svg><span>自动化任务</span></button>
+        <button class="navItem"><svg width="14" height="14"><use href="#i-grid"/></svg><span>更多</span></button>
+      </nav>
+
+      <div class="wsSection">
+        <div class="wsHeader">
+          <span class="wsHeaderLabel">工作区</span>
+          <span class="wsHeaderActions">
+            <button class="iconBtn sm" title="搜索会话"><svg width="13" height="13"><use href="#i-search"/></svg></button>
+            <button class="iconBtn sm" title="筛选"><svg width="13" height="13"><use href="#i-filter"/></svg></button>
+            <button class="iconBtn sm" id="addWorkspace" title="添加工作区"><svg width="13" height="13"><use href="#i-folder-plus"/></svg></button>
+          </span>
+        </div>
+        <div class="wsList" id="wsList"></div>
+      </div>
+    </div>
+
+    <div class="sidebarFoot">
+      <button class="navItem"><svg width="14" height="14"><use href="#i-dots"/></svg><span>更多</span></button>
     </div>
   </aside>
 
-  <main id="main">
-    <header id="topbar">
-      <span id="sessionTitle">新会话</span>
-      <span id="statusDot" class="dot idle"></span>
+  <main class="centerCol">
+    <header class="convHeader">
+      <div class="convHeaderLeft">
+        <span class="convTitle" id="convTitle">新会话</span>
+        <span class="modeBadge"><svg width="11" height="11"><use href="#i-spark"/></svg>标准模式</span>
+      </div>
+      <div class="convHeaderRight">
+        <button class="iconBtn sm" id="btnJson" title="查看会话 JSON"><svg width="14" height="14"><use href="#i-file"/></svg></button>
+        <button class="iconBtn sm" id="btnRight" title="侧栏"><svg width="14" height="14"><use href="#i-panel"/></svg></button>
+      </div>
     </header>
 
-    <div id="chat"></div>
+    <div class="tabBar" id="tabBar">
+      <button class="tab active" data-tab="chat">对话</button>
+      <button class="tab" data-tab="trajectory">轨迹</button>
+    </div>
 
-    <footer id="composer">
-      <textarea id="input" rows="1" placeholder="给 gsh 一个任务…（Enter 发送，Shift+Enter 换行）"></textarea>
-      <button id="send" class="btn-send" title="发送">↑</button>
-    </footer>
+    <div class="emptyState" id="emptyState">
+      <div class="emptyTitle">
+        <svg class="emptyMark" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2.6c1.3 4.6 3.4 6.7 8 8-4.6 1.3-6.7 3.4-8 8-1.3-4.6-3.4-6.7-8-8 4.6-1.3 6.7-3.4 8-8Z" fill="currentColor"/>
+        </svg>
+        <span>探索未至之境</span>
+        <span class="previewBadge">预览版</span>
+      </div>
+      <div class="emptyPicker">
+        <button class="wsPicker" id="wsPicker">
+          <svg width="13" height="13"><use href="#i-folder-plus"/></svg>
+          <span id="wsPickerLabel">选择工作区</span>
+          <svg width="12" height="12" class="chev"><use href="#i-chevron"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="chatScroll" id="chatScroll">
+      <div class="chat" id="chat"></div>
+    </div>
+
+    <div class="composerWrap" id="composerWrap">
+      <div class="composer" id="composer">
+        <textarea id="input" rows="1" placeholder="发消息或创建任务，/ 调用指令，@ 文件或对话"></textarea>
+        <div class="composerRow">
+          <button class="ghostBtn square" id="attachBtn" title="添加附件"><svg width="15" height="15"><use href="#i-plus"/></svg></button>
+          <button class="ghostBtn" id="permBtn"><svg width="13" height="13"><use href="#i-shield"/></svg><span>完全权限</span><svg width="12" height="12" class="chev"><use href="#i-chevron"/></svg></button>
+          <span class="flex1"></span>
+          <button class="ghostBtn" id="modelBtn"><span id="modelName">…</span><svg width="12" height="12" class="chev"><use href="#i-chevron"/></svg></button>
+          <button class="sendBtn" id="sendBtn" title="发送"><svg width="16" height="16"><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+      <div class="statsBar" id="statsBar"></div>
+    </div>
   </main>
 </div>
+
+<div class="toastLayer" id="toastLayer"></div>
+<script src="md.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

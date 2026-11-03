@@ -2,7 +2,10 @@
 // 各插件只依赖本包 + kernel，互不直接 import（对齐 DSH 的 typed service 思路）。
 package api
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Role 消息角色。
 type Role string
@@ -58,12 +61,24 @@ type Session interface {
 	Messages() []Message
 }
 
-// SessionStore 会话管理：新建 / 列出 / 恢复 / 分叉。
+// SessionStore 会话管理：新建 / 列出 / 恢复 / 分叉 / 删除。
 type SessionStore interface {
 	New() (Session, error)
 	List() ([]string, error) // 会话 ID 列表，新→旧
 	Open(id string) (Session, error)
 	Fork(id string) (Session, error)
+	// ListMeta 带标题/时间/消息数的会话列表（UI 用），新→旧。
+	ListMeta() ([]SessionMeta, error)
+	// Delete 物理删除会话文件。
+	Delete(id string) error
+}
+
+// SessionMeta 会话摘要。
+type SessionMeta struct {
+	ID       string    `json:"id"`
+	Title    string    `json:"title"`
+	Updated  time.Time `json:"updated"`
+	Messages int       `json:"messages"`
 }
 
 // StreamDelta 流式文本回调。
@@ -78,6 +93,9 @@ type LLM interface {
 type Loop interface {
 	Run(ctx context.Context, userText string, onDelta StreamDelta) (string, error)
 	RunTraced(ctx context.Context, userText string, onDelta StreamDelta, onEvent EventHandler) (string, error)
+	// RunSession 在指定会话里跑一轮。sessionID 为空时沿用进程内默认会话。
+	// 存在的理由：Web UI 同时开着多个会话，不能靠「全局 activeSession」串台。
+	RunSession(ctx context.Context, sessionID string, userText string, onDelta StreamDelta, onEvent EventHandler) (string, error)
 }
 
 // EventKind 运行事件类型（Trajectory 粒度）。
@@ -92,9 +110,11 @@ const (
 // Event 一次运行的事件记录（对齐 DSH 的 append-only trajectory 可观测性）。
 type Event struct {
 	Kind EventKind `json:"kind"`
+	ID   string    `json:"id,omitempty"`   // 工具调用 ID（tool_call 与 tool_result 配对用）
 	Name string    `json:"name,omitempty"` // 工具名
 	Args string    `json:"args,omitempty"` // 工具参数 JSON
 	Data string    `json:"data,omitempty"` // 结果内容 / 最终回复
+	Err  bool      `json:"err,omitempty"`  // 工具执行是否失败
 }
 
 // EventHandler 运行事件回调，可为 nil。

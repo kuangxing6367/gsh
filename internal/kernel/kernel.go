@@ -126,6 +126,15 @@ func (k *Kernel) pluginConfig(name string) map[string]any {
 	return k.cfg.Options[name]
 }
 
+// Options 返回某个插件的配置节（供 UI / 诊断读取，不要在热路径反复调用）。
+func (k *Kernel) Options(name string) (map[string]any, bool) {
+	if k.cfg == nil || k.cfg.Options == nil {
+		return nil, false
+	}
+	v, ok := k.cfg.Options[name]
+	return v, ok
+}
+
 // New 创建内核。
 func New(cfg *Config) *Kernel {
 	if cfg == nil {
