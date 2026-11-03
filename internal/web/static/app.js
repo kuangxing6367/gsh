@@ -1311,6 +1311,158 @@
     if (S.running) updateStats();
   }, 1000);
 
+  // ---------- audit log ----------
+  //
+  // 审计是全局合规记录（不绑定某个会话），用独立视图承载：类型筛选 + 刷新 + 自动轮询。
+  // 后端 GET /api/audit 返回 {enabled, entries}，entries 已是新→旧。
+
+  S.auditFilter = 'all';
+  S.auditEntries = [];
+  S.auditEnabled = false;
+  S.auditLastTop = '';
+
+  function auditIdentity(e) {
+    return [e.ts, e.tool, e.session, e.action, e.blocked || '', e.dur_ms, e.result_len].join('|');
+  }
+
+  function auditTimeLabel(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return iso || '';
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  function auditMetaItem(k, v) {
+    const span = el('span');
+    span.appendChild(el('b', null, k + '：'));
+    span.appendChild(document.createTextNode(v));
+    return span;
+  }
+
+  function auditRow(e) {
+    const row = el('div', 'auditRow');
+    row.dataset.action = e.action;
+
+    const head = el('div', 'auditRowHead');
+    const labels = { execute: '执行', denied: '拒绝', blocked: '拦截' };
+    const act = el('span', 'auditAction', labels[e.action] || e.action);
+    act.dataset.a = e.action;
+    head.appendChild(act);
+    head.appendChild(el('span', 'auditTool', e.tool || '—'));
+    head.appendChild(el('span', 'auditTime', auditTimeLabel(e.ts)));
+    if (e.action === 'execute') {
+      const st = el('span', 'auditStatus', e.ok ? '✓ 成功' : '✗ 失败');
+      st.dataset.ok = e.ok ? 'true' : 'false';
+      head.appendChild(st);
+    }
+    row.appendChild(head);
+
+    const meta = el('div', 'auditMeta');
+    meta.appendChild(auditMetaItem('会话', e.session === '-' ? '本地' : e.session));
+    if (e.node) meta.appendChild(auditMetaItem('节点', e.node));
+    meta.appendChild(auditMetaItem('权限', e.perm || '—'));
+    if (e.action === 'execute') {
+      meta.appendChild(auditMetaItem('耗时', (e.dur_ms != null ? e.dur_ms : 0) + ' ms'));
+      meta.appendChild(auditMetaItem('输出', fmtSize(e.result_len || 0)));
+    }
+    row.appendChild(meta);
+
+    if (e.blocked) row.appendChild(el('div', 'auditReason', '原因：' + e.blocked));
+    if (e.err) row.appendChild(el('div', 'auditErr', '错误：' + e.err));
+    if (e.args) {
+      const wrap = el('div', 'auditArgs');
+      wrap.appendChild(el('div', 'auditArgsLabel', '参数（已脱敏）'));
+      wrap.appendChild(el('pre', null, prettyArgs(e.args)));
+      row.appendChild(wrap);
+    }
+    return row;
+  }
+
+  async function loadAudit() {
+    try {
+      const d = await api('/api/audit?n=500');
+      S.auditEnabled = !!d.enabled;
+      S.auditEntries = d.entries || [];
+      S.auditLastTop = S.auditEntries.length ? auditIdentity(S.auditEntries[0]) : '';
+      renderAudit();
+    } catch (e) {
+      const list = $('#auditList');
+      list.innerHTML = '';
+      list.appendChild(el('div', 'auditEmpty', '加载失败：' + e.message));
+    }
+  }
+
+  function renderAudit() {
+    const list = $('#auditList');
+    list.innerHTML = '';
+    const sub = $('#auditSub');
+    if (!S.auditEnabled) {
+      sub.textContent = '审计已关闭';
+      sub.dataset.on = 'false';
+    } else {
+      sub.textContent = (S.auditEntries.length || '无') + ' 条记录';
+      sub.dataset.on = 'true';
+    }
+    const f = S.auditFilter;
+    const rows = S.auditEntries.filter((e) => f === 'all' || e.action === f);
+    if (!rows.length) {
+      list.appendChild(
+        el('div', 'auditEmpty', S.auditEnabled ? '暂无该类型的审计记录' : '审计功能未开启（config 中 plugins_cfg.tools.audit=false 关闭了落盘）')
+      );
+      return;
+    }
+    rows.forEach((e) => list.appendChild(auditRow(e)));
+  }
+
+  function openAudit() {
+    if (S.running) {
+      toast('正在运行，先停止当前任务');
+      return;
+    }
+    S.currentId = null;
+    frame.dataset.view = 'audit';
+    setDrawer(false);
+    S.auditFilter = 'all';
+    document.querySelectorAll('#auditFilter .auditFBtn').forEach((b) => {
+      b.dataset.active = b.dataset.f === 'all' ? 'true' : 'false';
+    });
+    $('#convTitle').textContent = '操作审计日志';
+    loadAudit();
+  }
+
+  // 仅当顶部记录变化才重渲染，避免无新记录时也重置已展开项。
+  async function pollAudit() {
+    try {
+      const d = await api('/api/audit?n=500');
+      S.auditEnabled = !!d.enabled;
+      const entries = d.entries || [];
+      const top = entries.length ? auditIdentity(entries[0]) : '';
+      if (top !== S.auditLastTop) {
+        S.auditEntries = entries;
+        S.auditLastTop = top;
+        renderAudit();
+      }
+    } catch {
+      /* 轮询失败静默，不干扰使用 */
+    }
+  }
+
+  $('#navAudit').onclick = openAudit;
+  $('#auditRefresh').onclick = loadAudit;
+  $('#auditFilter').addEventListener('click', (e) => {
+    const b = e.target.closest('.auditFBtn');
+    if (!b) return;
+    S.auditFilter = b.dataset.f;
+    document.querySelectorAll('#auditFilter .auditFBtn').forEach((x) => {
+      x.dataset.active = x === b ? 'true' : 'false';
+    });
+    renderAudit();
+  });
+
+  // 审计视图打开且页面可见时，每 4s 轻量轮询顶部记录。
+  setInterval(() => {
+    if (frame.dataset.view === 'audit' && document.visibilityState === 'visible') pollAudit();
+  }, 4000);
+
   // ---------- boot ----------
 
   (async function boot() {

@@ -1260,3 +1260,142 @@ svg { display: block; }
   .chat { width: calc(100% - 32px); }
   .composerWrap { padding: 8px 12px 10px; }
 }
+
+/* ---------- audit view switching ---------- */
+
+/* 审计视图是全局合规记录，不挂在某个会话下，因此进入时收起对话相关区域。 */
+.frame[data-view="audit"] .emptyState,
+.frame[data-view="audit"] .chatScroll,
+.frame[data-view="audit"] .traceScroll,
+.frame[data-view="audit"] .composerWrap,
+.frame[data-view="audit"] .tabBar { display: none; }
+.frame[data-view="audit"] .modeBadge { display: none; }
+.frame[data-view="audit"] #btnJson { display: none; }
+.frame[data-view="audit"] #auditScroll { display: block; }
+.frame[data-view="audit"] #auditRefresh { display: inline-flex; }
+
+#auditRefresh { display: none; }
+#auditScroll { display: none; flex: 1; min-height: 0; overflow-y: auto; }
+
+/* ---------- audit panel ---------- */
+
+.audit {
+  width: min(var(--content-max), calc(100% - 48px));
+  margin: 0 auto;
+}
+.auditHead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  background: var(--bg-base);
+  border-bottom: 0.5px solid var(--border-l1);
+}
+.auditHeadLeft { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.auditTitle { font-size: 13px; font-weight: 500; color: var(--label-primary); flex: 0 0 auto; }
+.auditSub { font-size: 11px; color: var(--label-caption); white-space: nowrap; }
+.auditSub[data-on="true"] { color: var(--success); }
+.auditSub[data-on="false"] { color: var(--warn); }
+.auditHeadRight { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+
+.auditFilter { display: flex; gap: 2px; }
+.auditFBtn {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  color: var(--label-tertiary);
+}
+.auditFBtn:hover { background: var(--hover); color: var(--label-secondary); }
+.auditFBtn[data-active="true"] { background: var(--nav-active); color: var(--label-primary); }
+
+.auditList { display: flex; flex-direction: column; gap: 8px; padding: 10px 0 24px; }
+
+.auditRow {
+  border: 1px solid var(--border-l1);
+  border-radius: var(--r-sm);
+  background: var(--bg-layer-1);
+  padding: 9px 11px;
+}
+.auditRow[data-action="blocked"] { border-color: rgba(245, 158, 11, 0.35); }
+.auditRow[data-action="denied"] { border-color: rgba(242, 90, 90, 0.42); }
+
+.auditRowHead { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.auditAction {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 100px;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+.auditAction[data-a="execute"] { color: var(--brand-blue); background: rgba(77, 147, 248, 0.14); }
+.auditAction[data-a="denied"] { color: var(--error); background: rgba(242, 90, 90, 0.14); }
+.auditAction[data-a="blocked"] { color: var(--warn); background: rgba(245, 158, 11, 0.14); }
+.auditTool {
+  font-family: var(--font-code);
+  font-size: 12.5px;
+  color: var(--label-primary);
+}
+.auditTime { font-size: 11px; color: var(--label-caption); margin-left: auto; flex: 0 0 auto; }
+.auditStatus { font-size: 11px; flex: 0 0 auto; }
+.auditStatus[data-ok="true"] { color: var(--success); }
+.auditStatus[data-ok="false"] { color: var(--error); }
+
+.auditMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 7px;
+  font-size: 11.5px;
+  color: var(--label-tertiary);
+}
+.auditMeta b { color: var(--label-secondary); font-weight: 500; }
+
+.auditReason, .auditErr {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  padding: 6px 9px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.auditReason { color: var(--warn); background: rgba(245, 158, 11, 0.08); }
+.auditErr { color: var(--error); background: rgba(242, 90, 90, 0.08); }
+
+.auditArgs { margin-top: 8px; }
+.auditArgsLabel {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--label-caption);
+  margin-bottom: 4px;
+}
+.auditArgs pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--code-bg);
+  border: 1px solid var(--border-l1);
+  border-radius: 6px;
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--label-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.auditEmpty {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--label-caption);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
