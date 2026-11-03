@@ -293,3 +293,10 @@ gsh 作为未来嵌进沙箱 / 运维体系的 harness，操作可追溯是刚�
 - [x] TUI markdown 渲染（标题/列表/引用/代码块/行内码/链接，按终端单元格宽度折行）
 - [x] 操作审计日志（落盘 + 脱敏 + 查询 API + Web 展示面板）
 - [ ] 工具的 workspace 白名单（限制只能操作某个根目录）
+
+## License
+
+[MIT](LICENSE) © 2026 kuangxing6367
+
+第三方依赖各自沿用其原协议（charmbracelet 系为 MIT；`golang.org/x/*` 为 BSD-3-Clause）。内核本身只用 Go 标准库。
+
