@@ -33,7 +33,19 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 	ctx.Provide("toolRegistry", p.reg)
 
 	cfg := ctx.Config()
-	bt := &BashTool{}
+	ws := NewWorkspace(".")
+	if cfg != nil {
+		if v, ok := cfg["workspace"].(string); ok && v != "" {
+			if err := ws.Set(v); err != nil {
+				fmt.Fprintf(os.Stderr, "[tools] 警告：workspace %q 不可用（%v），改用 %s\n", v, err, ws.Root())
+			}
+		}
+	}
+	// 工作区是跨插件共享的运行时状态：Web UI 切目录后，
+	// shell 的 cwd 与所有文件工具的路径解析必须同时切换。
+	ctx.Provide("workspace", ws)
+
+	bt := &BashTool{ws: ws}
 	if cfg != nil {
 		if v, ok := cfg["allow_destructive"].(bool); ok {
 			bt.allowDestructive = v
@@ -48,9 +60,6 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 			}
 			bt.shellChain = chain
 			bt.requireShell = explicit
-		}
-		if v, ok := cfg["workspace"].(string); ok && v != "" {
-			bt.workspace = v
 		}
 		// 远程节点配置：plugins_cfg.tools.remote.{nodes, ssh_bin}
 		if rc, ok := cfg["remote"].(map[string]any); ok {
@@ -116,16 +125,16 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 
 	all := []api.Tool{
 		bt,
-		&ReadFileTool{},
-		&WriteFileTool{},
-		&EditFileTool{},
-		&GlobTool{},
-		&GrepTool{},
-		&ListDirTool{},
-		&MakeDirTool{},
-		&MovePathTool{},
-		&CopyPathTool{},
-		&DeletePathTool{allowRecursive: bt.allowDestructive},
+		&ReadFileTool{ws: ws},
+		&WriteFileTool{ws: ws},
+		&EditFileTool{ws: ws},
+		&GlobTool{ws: ws},
+		&GrepTool{ws: ws},
+		&ListDirTool{ws: ws},
+		&MakeDirTool{ws: ws},
+		&MovePathTool{ws: ws},
+		&CopyPathTool{ws: ws},
+		&DeletePathTool{allowRecursive: bt.allowDestructive, ws: ws},
 		&WebFetchTool{},
 		&HTTPRequestTool{},
 	}

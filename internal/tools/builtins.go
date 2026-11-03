@@ -107,7 +107,7 @@ type NodeSpec struct {
 type BashTool struct {
 	allowDestructive bool
 	requireShell     bool // true：无 shell 直接报错，不允许降级为直连执行
-	workspace        string
+	ws               *Workspace
 	nodes            map[string]NodeSpec
 	sshBin           string
 	shellChain       []ShellSpec
@@ -208,8 +208,8 @@ func (t *BashTool) Run(ctx context.Context, argsJSON string) (string, error) {
 func (t *BashTool) runViaShell(ctx context.Context, sh ShellSpec, command string) (string, error) {
 	argv := append(append([]string{}, sh.Args...), shellPrelude(sh)+command)
 	cmd := exec.CommandContext(ctx, sh.Bin, argv...)
-	if t.workspace != "" {
-		cmd.Dir = t.workspace
+	if root := t.ws.Root(); root != "" {
+		cmd.Dir = root
 	}
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -225,8 +225,8 @@ func (t *BashTool) runViaShell(ctx context.Context, sh ShellSpec, command string
 // execArgv 直接执行 argv[0]，不经过任何 shell。
 func (t *BashTool) execArgv(ctx context.Context, argv []string) (string, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	if t.workspace != "" {
-		cmd.Dir = t.workspace
+	if root := t.ws.Root(); root != "" {
+		cmd.Dir = root
 	}
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -352,7 +352,7 @@ func (t *BashTool) runViaExec(ctx context.Context, command string, spec NodeSpec
 // ---------- read_file ----------
 
 // ReadFileTool 读文件。
-type ReadFileTool struct{}
+type ReadFileTool struct{ ws *Workspace }
 
 // Spec 工具描述。
 func (t *ReadFileTool) Spec() api.ToolSpec {
@@ -381,6 +381,7 @@ func (t *ReadFileTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	path = t.ws.Resolve(path)
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -422,7 +423,7 @@ func (t *ReadFileTool) Run(_ context.Context, argsJSON string) (string, error) {
 // ---------- write_file ----------
 
 // WriteFileTool 写文件（整文件覆盖）。
-type WriteFileTool struct{}
+type WriteFileTool struct{ ws *Workspace }
 
 // Spec 工具描述。
 func (t *WriteFileTool) Spec() api.ToolSpec {
@@ -450,6 +451,7 @@ func (t *WriteFileTool) Run(_ context.Context, argsJSON string) (string, error) 
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	path = t.ws.Resolve(path)
 	content, _ := m["content"].(string)
 	if dir := filepath.Dir(path); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -465,7 +467,7 @@ func (t *WriteFileTool) Run(_ context.Context, argsJSON string) (string, error) 
 // ---------- edit_file ----------
 
 // EditFileTool 精确字符串替换。
-type EditFileTool struct{}
+type EditFileTool struct{ ws *Workspace }
 
 // Spec 工具描述。
 func (t *EditFileTool) Spec() api.ToolSpec {
@@ -501,6 +503,7 @@ func (t *EditFileTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if path == "" || oldS == "" {
 		return "", fmt.Errorf("path and old_string are required")
 	}
+	path = t.ws.Resolve(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -537,7 +540,7 @@ func min(a, b int) int {
 // ---------- glob ----------
 
 // GlobTool 文件名模式匹配。
-type GlobTool struct{}
+type GlobTool struct{ ws *Workspace }
 
 // Spec 工具描述。
 func (t *GlobTool) Spec() api.ToolSpec {
@@ -564,7 +567,7 @@ func (t *GlobTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if pattern == "" {
 		return "", fmt.Errorf("pattern is required")
 	}
-	matches, err := filepath.Glob(pattern)
+	matches, err := filepath.Glob(t.ws.Resolve(pattern))
 	if err != nil {
 		return "", err
 	}
@@ -580,7 +583,7 @@ func (t *GlobTool) Run(_ context.Context, argsJSON string) (string, error) {
 // ---------- grep ----------
 
 // GrepTool 内容搜索。
-type GrepTool struct{}
+type GrepTool struct{ ws *Workspace }
 
 // Spec 工具描述。
 func (t *GrepTool) Spec() api.ToolSpec {
@@ -613,6 +616,7 @@ func (t *GrepTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if dir == "" {
 		dir = "."
 	}
+	dir = t.ws.Resolve(dir)
 	ext := argStr(m, "glob_ext")
 
 	var b strings.Builder

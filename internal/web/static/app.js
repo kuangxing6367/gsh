@@ -56,6 +56,13 @@
 
   const pad = (n) => String(n).padStart(2, '0');
 
+  // 工作区在侧栏只显示末级目录名（与 DSH 一致），完整路径放 tooltip。
+  function baseName(p) {
+    if (!p) return '';
+    const parts = String(p).split(/[\/]/).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : p;
+  }
+
   function timeLabel(iso) {
     const d = new Date(iso);
     if (isNaN(d)) return '';
@@ -113,9 +120,10 @@
     const group = el('div', 'wsGroup');
     const ws = el('button', 'wsItem');
     ws.appendChild(svg('i-file', 13));
-    const name = el('span', 'wsName', S.workspace || '默认工作区');
+    const name = el('span', 'wsName', baseName(S.workspace) || '默认工作区');
     ws.appendChild(name);
     ws.title = S.workspace || '';
+    ws.onclick = () => openWorkspacePicker(S.workspace);
     group.appendChild(ws);
 
     S.sessions.slice(0, 12).forEach((s) => {
@@ -133,7 +141,7 @@
     });
 
     list.appendChild(group);
-    $('#wsPickerLabel').textContent = S.workspace || '默认工作区';
+    $('#wsPickerLabel').textContent = baseName(S.workspace) || '选择一个工作区';
   }
 
   // ---------- chat rendering ----------
@@ -593,8 +601,91 @@
   $('#permBtn').onclick = () =>
     toast('当前权限：完全权限（allow_destructive 由配置决定）');
   $('#attachBtn').onclick = () => toast('附件上传待接入');
-  $('#addWorkspace').onclick = () => toast('工作区由 config.json 的 plugins_cfg.tools.workspace 配置');
-  $('#wsPicker').onclick = () => toast('工作区由 config.json 的 plugins_cfg.tools.workspace 配置');
+  $('#addWorkspace').onclick = () => openWorkspacePicker(S.workspace);
+  $('#wsPicker').onclick = () => openWorkspacePicker(S.workspace);
+
+  // ---------- workspace picker ----------
+
+  async function openWorkspacePicker(start) {
+    if ($('.modalMask')) return;
+
+    const mask = el('div', 'modalMask');
+    const modal = el('div', 'modal');
+    modal.appendChild(el('div', 'modalTitle', '选择工作区'));
+    const desc = el('div', 'modalDesc', 'Agent 的所有相对路径与命令都以工作区为基准。');
+    modal.appendChild(desc);
+
+    const pathBar = el('div', 'wsPathBar');
+    const upBtn = el('button', 'btn', '↑ 上级');
+    const pathText = el('span', 'wsPath', '');
+    pathBar.appendChild(upBtn);
+    pathBar.appendChild(pathText);
+    modal.appendChild(pathBar);
+
+    const list = el('div', 'wsBrowse');
+    modal.appendChild(list);
+
+    const foot = el('div', 'modalFoot');
+    const cancel = el('button', 'btn', '取消');
+    const pick = el('button', 'btn primary', '使用此目录');
+    foot.appendChild(cancel);
+    foot.appendChild(pick);
+    modal.appendChild(foot);
+
+    mask.appendChild(modal);
+    document.body.appendChild(mask);
+    const close = () => mask.remove();
+    cancel.onclick = close;
+    mask.onclick = (e) => {
+      if (e.target === mask) close();
+    };
+
+    let cur = '';
+
+    async function load(p) {
+      list.innerHTML = '';
+      list.appendChild(el('div', 'wsLoading', '加载中…'));
+      try {
+        const d = await api('/api/workspace/browse?path=' + encodeURIComponent(p || ''));
+        cur = d.path;
+        pathText.textContent = d.path;
+        pathText.title = d.path;
+        upBtn.onclick = () => load(d.parent);
+        list.innerHTML = '';
+        if (!d.dirs.length) {
+          list.appendChild(el('div', 'wsLoading', '（没有子目录）'));
+        }
+        d.dirs.forEach((dir) => {
+          const row = el('button', 'wsRow');
+          row.appendChild(svg('i-file', 13));
+          row.appendChild(el('span', null, dir.name));
+          row.onclick = () => load(dir.path);
+          list.appendChild(row);
+        });
+      } catch (e) {
+        list.innerHTML = '';
+        list.appendChild(el('div', 'wsLoading', '读取失败：' + e.message));
+      }
+    }
+
+    pick.onclick = async () => {
+      try {
+        await api('/api/workspace', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: cur }),
+        });
+        S.workspace = cur;
+        renderSidebar();
+        close();
+        toast('工作区已切换：' + cur);
+      } catch (e) {
+        toast('切换失败：' + e.message, 'error');
+      }
+    };
+
+    load(start || '');
+  }
   $('#btnJson').onclick = async () => {
     if (!S.currentId) return;
     try {

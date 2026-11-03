@@ -11,12 +11,14 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"gsh/internal/api"
 	"gsh/internal/kernel"
+	"gsh/internal/tools"
 )
 
 //go:embed static
@@ -90,6 +92,8 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	mux.HandleFunc("POST /api/chat", w.handleChat)
 	mux.HandleFunc("POST /api/stop", w.handleStop)
 	mux.HandleFunc("POST /api/settings", w.handleSettings)
+	mux.HandleFunc("GET /api/workspace/browse", w.handleBrowse)
+	mux.HandleFunc("POST /api/workspace", w.handleSetWorkspace)
 
 	srv := &http.Server{Addr: s.addr, Handler: mux}
 	return srv.ListenAndServe()
@@ -120,7 +124,7 @@ func (w *webAPI) handleState(rw http.ResponseWriter, r *http.Request) {
 		"base_url":        w.llmString("base_url"),
 		"thinking_format": w.llmString("thinking_format"),
 		"api_key_set":     w.llmString("api_key") != "",
-		"workspace":       w.toolString("workspace"),
+		"workspace":       w.wsRoot(),
 		"tools":           w.toolNames(),
 		"sessions":        metas,
 		"now":             time.Now().Format(time.RFC3339),
@@ -300,6 +304,74 @@ func (w *webAPI) handleStop(rw http.ResponseWriter, r *http.Request) {
 	}
 	cancel()
 	writeJSON(rw, map[string]any{"ok": true})
+}
+
+// ---------- workspace ----------
+
+// handleBrowse GET ?path= → 列出该目录下的子目录（目录选择器用）。
+func (w *webAPI) handleBrowse(rw http.ResponseWriter, r *http.Request) {
+	p := r.URL.Query().Get("path")
+	if p == "" {
+		p = w.wsRoot()
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		httpError(rw, http.StatusBadRequest, err.Error())
+		return
+	}
+	ents, err := os.ReadDir(abs)
+	if err != nil {
+		httpError(rw, http.StatusBadRequest, err.Error())
+		return
+	}
+	dirs := []map[string]string{}
+	for _, e := range ents {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		dirs = append(dirs, map[string]string{"name": e.Name(), "path": filepath.Join(abs, e.Name())})
+	}
+	writeJSON(rw, map[string]any{"path": abs, "parent": filepath.Dir(abs), "dirs": dirs})
+}
+
+// handleSetWorkspace POST {path} → 切换所有工具的工作区基准。
+func (w *webAPI) handleSetWorkspace(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	_ = json.Unmarshal(body, &req)
+	if strings.TrimSpace(req.Path) == "" {
+		httpError(rw, http.StatusBadRequest, "path is required")
+		return
+	}
+	ws, err := kernel.Use[*tools.Workspace](w.k, "workspace")
+	if err != nil {
+		httpError(rw, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := ws.Set(req.Path); err != nil {
+		httpError(rw, http.StatusBadRequest, err.Error())
+		return
+	}
+	// 顺手写回配置，下次启动仍是这个工作区。
+	toolsCfg, _ := w.k.Options("tools")
+	next := map[string]any{}
+	for k, v := range toolsCfg {
+		next[k] = v
+	}
+	next["workspace"] = ws.Root()
+	w.k.SetOptions("tools", next)
+	_ = persistPluginOptions(w.k.ConfigPath(), "tools", next)
+
+	writeJSON(rw, map[string]any{"ok": true, "workspace": ws.Root()})
+}
+
+func (w *webAPI) wsRoot() string {
+	if ws, err := kernel.Use[*tools.Workspace](w.k, "workspace"); err == nil {
+		return ws.Root()
+	}
+	return "."
 }
 
 // ---------- settings ----------

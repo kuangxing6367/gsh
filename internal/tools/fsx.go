@@ -16,7 +16,7 @@ import (
 // ---------- list_dir ----------
 
 // ListDirTool 列目录内容。
-type ListDirTool struct{}
+type ListDirTool struct{ ws *Workspace }
 
 // Spec 工具描述。
 func (t *ListDirTool) Spec() api.ToolSpec {
@@ -44,6 +44,7 @@ func (t *ListDirTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if root == "" {
 		root = "."
 	}
+	root = t.ws.Resolve(root)
 	recursive, _ := m["recursive"].(bool)
 	depth := 2
 	if v, ok := m["depth"].(float64); ok && v > 0 {
@@ -110,7 +111,7 @@ func (t *ListDirTool) Run(_ context.Context, argsJSON string) (string, error) {
 // ---------- make_dir ----------
 
 // MakeDirTool 创建目录（含父目录）。
-type MakeDirTool struct{}
+type MakeDirTool struct{ ws *Workspace }
 
 // Spec 工具描述。
 func (t *MakeDirTool) Spec() api.ToolSpec {
@@ -135,6 +136,7 @@ func (t *MakeDirTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	path = t.ws.Resolve(path)
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return "", err
 	}
@@ -144,7 +146,7 @@ func (t *MakeDirTool) Run(_ context.Context, argsJSON string) (string, error) {
 // ---------- move_path ----------
 
 // MovePathTool 移动/重命名（同盘 rename）。
-type MovePathTool struct{}
+type MovePathTool struct{ ws *Workspace }
 
 // Spec 工具描述。
 func (t *MovePathTool) Spec() api.ToolSpec {
@@ -172,6 +174,7 @@ func (t *MovePathTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if from == "" || to == "" {
 		return "", fmt.Errorf("from and to are required")
 	}
+	from, to = t.ws.Resolve(from), t.ws.Resolve(to)
 	if dir := filepath.Dir(to); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err
@@ -186,7 +189,7 @@ func (t *MovePathTool) Run(_ context.Context, argsJSON string) (string, error) {
 // ---------- copy_path ----------
 
 // CopyPathTool 复制文件或目录。
-type CopyPathTool struct{}
+type CopyPathTool struct{ ws *Workspace }
 
 // Spec 工具描述。
 func (t *CopyPathTool) Spec() api.ToolSpec {
@@ -215,6 +218,7 @@ func (t *CopyPathTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if from == "" || to == "" {
 		return "", fmt.Errorf("from and to are required")
 	}
+	from, to = t.ws.Resolve(from), t.ws.Resolve(to)
 	overwrite := true
 	if v, ok := m["overwrite"].(bool); ok {
 		overwrite = v
@@ -281,6 +285,7 @@ func copyAny(from, to string, info os.FileInfo, overwrite bool) error {
 type DeletePathTool struct {
 	// allowRecursive 允许删除非空目录（由 allow_destructive 决定）。
 	allowRecursive bool
+	ws             *Workspace
 }
 
 // Spec 工具描述。
@@ -309,6 +314,7 @@ func (t *DeletePathTool) Run(_ context.Context, argsJSON string) (string, error)
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	path = t.ws.Resolve(path)
 	if reason := unsafeDeleteTarget(path); reason != "" {
 		return "", fmt.Errorf("拒绝删除：%s", reason)
 	}
