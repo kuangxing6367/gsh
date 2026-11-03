@@ -628,12 +628,21 @@ svg { display: block; }
   color: var(--label-caption);
   padding: 2px 0;
 }
+.statusRow > span { white-space: nowrap; flex: 0 0 auto; }
 .statusRow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--label-caption); flex: 0 0 auto; }
 .statusRow[data-kind="running"] .dot { background: var(--brand-blue); animation: pulse 1.2s var(--ease) infinite; }
 .statusRow[data-kind="done"] .dot { background: var(--success); }
 .statusRow[data-kind="error"] .dot { background: var(--error); }
 .statusRow[data-kind="error"] { color: var(--error); }
-.statusRow .detail { color: var(--label-tertiary); }
+.statusRow .detail {
+  color: var(--label-tertiary);
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.statusRow .detail:hover { white-space: normal; overflow-wrap: anywhere; }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
@@ -1013,6 +1022,60 @@ svg { display: block; }
 .btn:hover { background: var(--active); color: var(--label-primary); }
 .btn.primary { background: var(--label-primary); color: var(--bg-base); }
 .btn.primary:hover { background: #fff; }
+
+/* ---------- attachments ---------- */
+.attachRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+.attachChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-l3);
+  border-radius: var(--radius-s);
+  background: var(--hover);
+  font-size: 11.5px;
+  color: var(--label-primary);
+  max-width: 260px;
+}
+.attachName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachSize { color: var(--label-tertiary); font-size: 10.5px; flex-shrink: 0; }
+.attachRemove {
+  display: inline-flex;
+  border: 0;
+  background: transparent;
+  color: var(--label-secondary);
+  cursor: pointer;
+  padding: 2px;
+}
+.attachRemove:hover { color: var(--label-primary); }
+
+.attachCards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+.attachCard {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-l3);
+  border-radius: var(--radius-s);
+  background: var(--hover);
+  font-size: 11.5px;
+  color: var(--label-primary);
+}
 
 /* ---------- permission picker ---------- */
 .permList { display: flex; flex-direction: column; gap: 8px; margin: 14px 0 4px; }

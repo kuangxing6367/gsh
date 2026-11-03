@@ -45,6 +45,7 @@
     lastTurn: null,      // {root, msgEl, text}
     pendingTools: [],    // 流式过程中的工具行
     permission: 'standard',
+    attachments: [],     // 待发送附件 {name,size,text}
   };
 
   const frame = $('#frame');
@@ -160,9 +161,33 @@
     return S.lastTurn;
   }
 
-  function appendUser(content, iso) {
+  function appendUser(content, iso, atts) {
     const t = newTurn();
     const row = el('div', 'userRow');
+
+    // 附件内容在发送时拼进了 prompt；回显时把它们抽回卡片，
+    // 免得气泡里一大段原文把真正的提问挤没。
+    content = String(content == null ? '' : content);
+    const list = (atts || []).slice();
+    content = content
+      .replace(/\n--- 附件 ([^\n]+?) ---\n([\s\S]*?)\n--- 附件结束 ---/g, (m, head, body) => {
+        const name = head.replace(/（[^）]*）$/, '').trim();
+        list.push({ name: name, size: body.length, text: body });
+        return '';
+      })
+      .trim();
+
+    if (list.length) {
+      const cards = el('div', 'attachCards');
+      list.forEach((a) => {
+        const c = el('div', 'attachCard');
+        c.appendChild(svg('i-file', 12));
+        c.appendChild(el('span', null, a.name));
+        c.appendChild(el('span', 'attachSize', fmtSize(a.size)));
+        cards.appendChild(c);
+      });
+      row.appendChild(cards);
+    }
     row.appendChild(el('div', 'userBubble', content));
     if (iso) row.appendChild(el('div', 'userMeta', timeLabel(iso)));
     t.root.appendChild(row);
@@ -382,7 +407,7 @@
 
   async function send() {
     const text = input.value.trim();
-    if (!text || S.running) return;
+    if ((!text && !S.attachments.length) || S.running) return;
 
     // 未选会话时先建一个，保证消息有落点。
     if (!S.currentId) {
@@ -396,11 +421,21 @@
     }
 
     frame.dataset.view = 'chat';
+    let prompt, atts, t;
+    try {
+      prompt = composePrompt(text);
+      atts = attachmentSummary();
+    } catch (e) {
+      toast('消息组装失败：' + e.message, 'error');
+      return;
+    }
     input.value = '';
+    S.attachments = [];
+    renderAttach();
     autoGrow();
     setRunning(true);
 
-    const t = appendUser(text, new Date().toISOString());
+    t = appendUser(text || '（仅附件）', new Date().toISOString(), atts);
     S.turns += 1;
     if (S.turns === 1) $('#convTitle').textContent = text.slice(0, 42);
     updateStats();
@@ -415,7 +450,7 @@
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: text, session_id: S.currentId, run_id: runId }),
+        body: JSON.stringify({ prompt: prompt, session_id: S.currentId, run_id: runId }),
         signal: ctrl.signal,
       });
       if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
@@ -592,6 +627,92 @@
     }
   }
 
+  // ---------- attachments ----------
+  //
+  // 附件走纯前端读文本，随消息一起送进 prompt：
+  // harness 不是文件中转站，模型真正需要的是「内容能进上下文」。
+  // 大文件/二进制在这里就拒绝，不给后端留一个必炸的入口。
+  const ATTACH_MAX = 256 * 1024; // 单文件上限
+
+  const attachRow = $('#attachRow');
+  const attachInput = $('#attachInput');
+
+  function fmtSize(n) {
+    if (n < 1024) return n + 'B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + 'KB';
+    return (n / 1024 / 1024).toFixed(1) + 'MB';
+  }
+
+  function renderAttach() {
+    attachRow.innerHTML = '';
+    if (!S.attachments.length) {
+      attachRow.hidden = true;
+      return;
+    }
+    attachRow.hidden = false;
+    S.attachments.forEach((a, i) => {
+      const chip = el('div', 'attachChip');
+      chip.appendChild(svg('i-file', 12));
+      chip.appendChild(el('span', 'attachName', a.name));
+      chip.appendChild(el('span', 'attachSize', fmtSize(a.size)));
+      const x = el('button', 'attachRemove');
+      x.appendChild(svg('i-x', 10));
+      x.onclick = () => {
+        S.attachments.splice(i, 1);
+        renderAttach();
+        autoGrow();
+      };
+      chip.appendChild(x);
+      attachRow.appendChild(chip);
+    });
+    autoGrow();
+  }
+
+  attachInput.onchange = async () => {
+    for (const f of attachInput.files) {
+      if (S.attachments.length >= 8) {
+        toast('一次最多 8 个附件', 'error');
+        break;
+      }
+      if (S.attachments.some((a) => a.name === f.name && a.size === f.size)) {
+        continue; // 同名同大小视为重复
+      }
+      if (f.size > ATTACH_MAX) {
+        toast(f.name + ' 超过 ' + fmtSize(ATTACH_MAX) + '，未添加', 'error');
+        continue;
+      }
+      try {
+        const text = await f.text();
+        if (text.indexOf('\u0000') >= 0) {
+          toast(f.name + ' 是二进制文件，未添加', 'error');
+          continue;
+        }
+        S.attachments.push({ name: f.name, size: f.size, text: text });
+      } catch (e) {
+        toast('读取 ' + f.name + ' 失败：' + e.message, 'error');
+      }
+    }
+    attachInput.value = '';
+    renderAttach();
+  };
+
+  // 附件内容拼进 prompt：让模型直接看到，而不是猜文件里有什么。
+  function composePrompt(text) {
+    if (!S.attachments.length) return text;
+    const parts = [text];
+    S.attachments.forEach((a) => {
+      const head = '\n--- 附件 ' + a.name + '（' + fmtSize(a.size) + '）---\n';
+      const tail = '\n--- 附件结束 ---';
+      parts.push(head + a.text + tail);
+    });
+    return parts.join('');
+  }
+
+  // 发送时随消息带上附件元信息，回显卡片用（内容已在 composePrompt 里）。
+  function attachmentSummary() {
+    return S.attachments.map((a) => ({ name: a.name, size: a.size }));
+  }
+
   $('#newSessionBtn').onclick = newSession;
 
   $('#collapseBtn').onclick = () => {
@@ -602,7 +723,7 @@
 
   $('#modelBtn').onclick = openSettings;
   $('#permBtn').onclick = openPermission;
-  $('#attachBtn').onclick = () => toast('附件上传待接入');
+  $('#attachBtn').onclick = () => $('#attachInput').click();
   $('#addWorkspace').onclick = () => openWorkspacePicker(S.workspace);
   $('#wsPicker').onclick = () => openWorkspacePicker(S.workspace);
 
