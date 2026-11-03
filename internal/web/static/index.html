@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gsh — agent harness</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <span class="brand-mark">✦</span>
+      <span class="brand-name">gsh</span>
+    </div>
+    <button id="newSession" class="btn-new">＋ 新会话</button>
+    <nav id="sessionList"></nav>
+    <div class="sidebar-foot">
+      <span id="providerTag">…</span>
+    </div>
+  </aside>
+
+  <main id="main">
+    <header id="topbar">
+      <span id="sessionTitle">新会话</span>
+      <span id="statusDot" class="dot idle"></span>
+    </header>
+
+    <div id="chat"></div>
+
+    <footer id="composer">
+      <textarea id="input" rows="1" placeholder="给 gsh 一个任务…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <button id="send" class="btn-send" title="发送">↑</button>
+    </footer>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
