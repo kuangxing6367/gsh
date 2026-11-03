@@ -1184,6 +1184,47 @@ svg { display: block; }
 .navItem[disabled] { opacity: 0.45; cursor: default; }
 .navItem[disabled]:hover { background: transparent; color: inherit; }
 
+/* ---------- conv context menu ---------- */
+.contextMenu {
+  position: fixed;
+  z-index: 60;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-l3);
+  border-radius: var(--radius-m);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.ctxItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--label-primary);
+  font-size: 12.5px;
+  padding: 7px 10px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+.ctxItem:hover { background: var(--hover); }
+.ctxItem.danger { color: var(--error); }
+.ctxItem.danger:hover { background: rgba(255, 80, 80, 0.12); }
+
+/* ---------- sidebar search ---------- */
+.wsSearch {
+  width: calc(100% - 20px);
+  margin: 8px 10px 2px;
+  padding: 6px 9px;
+  font-size: 12px;
+  color: var(--label-primary);
+  background: var(--hover);
+  border: 1px solid var(--border-l3);
+  border-radius: var(--radius-s);
+  outline: none;
+}
+.wsSearch:focus { border-color: var(--border-l4); }
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 1024px) {

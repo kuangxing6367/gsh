@@ -55,6 +55,10 @@ type store struct {
 
 func (s *store) path(id string) string { return filepath.Join(s.dir, id+".jsonl") }
 
+// titlePath 自定义标题放在同名 .title 文件里：
+// 不改 JSONL 格式，删除会话时顺手一起删。
+func (s *store) titlePath(id string) string { return filepath.Join(s.dir, id+".title") }
+
 func (s *store) New() (api.Session, error) {
 	id := time.Now().UTC().Format("20060102-150405") + "-" + randSuffix()
 	f, err := os.OpenFile(s.path(id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
@@ -150,14 +154,26 @@ func (s *store) ListMeta() ([]api.SessionMeta, error) {
 			}
 		}
 		f.Close()
+		// 自定义标题优先：侧栏显示的是用户认的名字，不是自动摘要。
+		if raw, err := os.ReadFile(s.titlePath(id)); err == nil {
+			if t := strings.TrimSpace(string(raw)); t != "" {
+				meta.Title = t
+			}
+		}
 		out = append(out, meta)
 	}
 	return out, nil
 }
 
 // summarize 把首条用户消息压成一行标题。
+// 附件内容块（"--- 附件 … ---"）先剥掉：标题要认出「用户问了什么」，
+// 不是把整段附件原文也算进摘要。
 func summarize(s string) string {
+	s = stripAttachBlocks(s)
 	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return "（附件）"
+	}
 	const max = 42
 	if len([]rune(s)) <= max {
 		return s
@@ -172,6 +188,7 @@ func (s *store) Delete(id string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_ = os.Remove(s.titlePath(id))
 	if err := os.Remove(s.path(id)); err != nil {
 		return fmt.Errorf("session: delete %s: %w", id, err)
 	}
@@ -267,4 +284,48 @@ func randSuffix() string {
 		return fmt.Sprintf("%x", time.Now().UnixNano()%0xffff)[0:4]
 	}
 	return hex.EncodeToString(b)
+}
+
+// Rename 写自定义标题。空串表示清除，回到自动摘要。
+func (s *store) Rename(id, title string) error {
+	if !validID(id) {
+		return fmt.Errorf("session: bad id %q", id)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := os.Stat(s.path(id)); err != nil {
+		return fmt.Errorf("session: %q not found", id)
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		if err := os.Remove(s.titlePath(id)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	const max = 80
+	if r := []rune(title); len(r) > max {
+		title = string(r[:max])
+	}
+	return os.WriteFile(s.titlePath(id), []byte(title), 0o644)
+}
+
+// stripAttachBlocks 去掉发送时拼进消息的附件内容块。
+func stripAttachBlocks(s string) string {
+	var b strings.Builder
+	lines := strings.Split(s, "\n")
+	skip := false
+	for _, ln := range lines {
+		trim := strings.TrimSpace(ln)
+		if strings.HasPrefix(trim, "--- 附件 ") && strings.HasSuffix(trim, "---") {
+			skip = !strings.Contains(trim, "附件结束")
+			continue
+		}
+		if skip {
+			continue
+		}
+		b.WriteString(ln)
+		b.WriteString("\n")
+	}
+	return b.String()
 }

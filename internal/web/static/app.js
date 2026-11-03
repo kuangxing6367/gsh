@@ -46,6 +46,7 @@
     pendingTools: [],    // 流式过程中的工具行
     permission: 'standard',
     attachments: [],     // 待发送附件 {name,size,text}
+    search: '',          // 侧栏会话搜索关键字
   };
 
   const frame = $('#frame');
@@ -128,7 +129,11 @@
     ws.onclick = () => openWorkspacePicker(S.workspace);
     group.appendChild(ws);
 
-    S.sessions.slice(0, 12).forEach((s) => {
+    const q = (S.search || '').trim().toLowerCase();
+    const shown = q
+      ? S.sessions.filter((x) => String(x.title || '').toLowerCase().includes(q)).slice(0, 30)
+      : S.sessions.slice(0, 12);
+    shown.forEach((s) => {
       const item = el('button', 'convItem');
       item.dataset.id = s.id;
       if (s.id === S.currentId) item.dataset.active = 'true';
@@ -137,7 +142,7 @@
       item.onclick = () => openSession(s.id);
       item.oncontextmenu = (e) => {
         e.preventDefault();
-        if (confirm(`删除会话「${s.title || '新会话'}」？此操作不可恢复。`)) deleteSession(s.id);
+        openConvMenu(e, s);
       };
       group.appendChild(item);
     });
@@ -820,6 +825,84 @@
       toast('读取失败：' + e.message, 'error');
     }
   };
+  // ---------- 会话右键菜单与搜索 ----------
+  //
+  // 右键不是「只能删除」：重命名是会话管理的基本操作，
+  // 会话多了以后，自动摘要出来的标题根本认不出哪个是哪个。
+
+  function closeConvMenu() {
+    const m = $('.contextMenu');
+    if (m) m.remove();
+    document.removeEventListener('click', closeConvMenu);
+  }
+
+  function openConvMenu(e, meta) {
+    closeConvMenu();
+    const menu = el('div', 'contextMenu');
+    menu.style.left = Math.min(e.clientX, window.innerWidth - 180) + 'px';
+    menu.style.top = Math.min(e.clientY, window.innerHeight - 110) + 'px';
+
+    const rename = el('button', 'ctxItem', '重命名');
+    rename.onclick = () => {
+      closeConvMenu();
+      const next = prompt('会话标题', meta.title || '');
+      if (next === null) return;
+      api('/api/session/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: meta.id, title: next }),
+      })
+        .then(() => {
+          if (S.currentId === meta.id) $('#convTitle').textContent = next.trim() || '新会话';
+          return refresh();
+        })
+        .catch((err) => toast('重命名失败：' + err.message, 'error'));
+    };
+
+    const del = el('button', 'ctxItem danger', '删除');
+    del.onclick = () => {
+      closeConvMenu();
+      if (confirm(`删除会话「${meta.title || '新会话'}」？此操作不可恢复。`)) deleteSession(meta.id);
+    };
+
+    menu.appendChild(rename);
+    menu.appendChild(del);
+    document.body.appendChild(menu);
+    setTimeout(() => document.addEventListener('click', closeConvMenu), 0);
+  }
+
+  // 侧栏搜索：输入即过滤会话标题。
+  function toggleSearch() {
+    let box = $('#wsSearch');
+    if (box) {
+      S.search = '';
+      box.remove();
+      renderSidebar();
+      return;
+    }
+    box = el('input', 'wsSearch');
+    box.id = 'wsSearch';
+    box.placeholder = '搜索会话…';
+    const header = document.querySelector('.wsHeader');
+    header.parentNode.insertBefore(box, header.nextSibling);
+    box.focus();
+    box.oninput = () => {
+      S.search = box.value;
+      renderSidebar();
+    };
+    box.onkeydown = (e) => {
+      if (e.key === 'Escape') {
+        S.search = '';
+        box.remove();
+        renderSidebar();
+      }
+    };
+  }
+
+  document.querySelectorAll('.wsHeaderActions .iconBtn').forEach((b, i) => {
+    if (i === 0) b.onclick = toggleSearch;
+  });
+
   // ---------- drawer：能力与环境 ----------
   //
   // 工具规格、技能、运行诊断都在这里。它回答的是「它到底能干什么、

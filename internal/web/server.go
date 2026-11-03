@@ -92,6 +92,7 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	mux.HandleFunc("GET /api/session", w.handleSessionDetail)
 	mux.HandleFunc("POST /api/session/new", w.handleSessionNew)
 	mux.HandleFunc("POST /api/session/delete", w.handleSessionDelete)
+	mux.HandleFunc("POST /api/session/rename", w.handleSessionRename)
 	mux.HandleFunc("POST /api/chat", w.handleChat)
 	mux.HandleFunc("POST /api/stop", w.handleStop)
 	mux.HandleFunc("POST /api/settings", w.handleSettings)
@@ -381,6 +382,32 @@ func (w *webAPI) wsRoot() string {
 		return ws.Root()
 	}
 	return "."
+}
+
+// handleSessionRename POST {id, title} → 改会话标题（空 title 清除自定义名）。
+func (w *webAPI) handleSessionRename(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil {
+		httpError(rw, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		httpError(rw, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	if req.ID == "" {
+		httpError(rw, http.StatusBadRequest, "id is required")
+		return
+	}
+	if err := w.store.Rename(req.ID, req.Title); err != nil {
+		httpError(rw, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(rw, map[string]any{"ok": true, "id": req.ID, "title": req.Title})
 }
 
 // ---------- tools / skills ----------

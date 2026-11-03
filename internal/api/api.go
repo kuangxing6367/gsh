@@ -71,6 +71,8 @@ type SessionStore interface {
 	ListMeta() ([]SessionMeta, error)
 	// Delete 物理删除会话文件。
 	Delete(id string) error
+	// Rename 设置自定义标题（空串清除，回到自动摘要）。
+	Rename(id, title string) error
 }
 
 // SessionMeta 会话摘要。
