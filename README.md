@@ -144,8 +144,29 @@ skills/
 bash 工具默认 **安全优先**，这是 DSH 的真实教训——它一条命令清空了用户 D 盘：
 
 - **致命命令永远拦截**（无论配置）：`rm -rf /`、根目录/`--no-preserve-root`、格式化/分区、`dd` 写块设备、fork bomb、关机重启、重定向覆写块设备、递归 `chmod/chown /`、清空根目录文件。
-- **受限命令默认拦截**（设 `allow_destructive: true` 放行）：递归删除 `rm -r`/`rmdir -s`/`del /s`、破坏性 `git`（clean/reset --hard/checkout .）、下载脚本管道执行（`curl|sh`）、递归改权限 `chmod -R`、`find -delete`、`truncate -s 0`。
-- 配置（`plugins_cfg.tools`）：`allow_destructive`（默认 false）、`workspace`（命令执行目录，默认 `.`）。
+- **受限命令默认拦截**（权限档位切到「完全权限」放行）：递归删除 `rm -r`/`rmdir -s`/`del /s`、破坏性 `git`（clean/reset --hard/checkout .）、下载脚本管道执行（`curl|sh`）、递归改权限 `chmod -R`、`find -delete`、`truncate -s 0`。
+
+### 权限档位（运行期可切换）
+
+读代码和改代码是两种授权，不该逼用户在做只读分析时也交出写权限。三档：
+
+| 档位 | 允许 | 拒绝 |
+|---|---|---|
+| `read_only` 只读 | `read_file` `glob` `grep` `list_dir` `web_fetch` `http_request` | `bash` 与全部写类工具 |
+| `standard` 标准（默认） | 读写文件、常规命令 | 破坏性命令（见上） |
+| `full` 完全权限 | 破坏性命令放行 | 灾难性命令仍拦截 |
+
+配置 `plugins_cfg.tools.permission: read_only|standard|full`；Web 输入区的权限按钮可随时切换，**下一次工具调用即生效**。旧字段 `allow_destructive: true` 等价于 `full`。
+
+拦截点在 `registry.Execute` 这个唯一执行入口，不靠每个工具自觉——新增工具漏检不存在。
+
+## 工作区（shell 与文件工具同一坐标系）
+
+切工作区只让 shell 的 `cwd` 变、文件工具仍按进程目录解析，等于给模型两套坐标系：它会读到 A 目录的文件、写进 B 目录，而且都返回成功。
+
+- `plugins_cfg.tools.workspace` 指定初始目录；Web 侧可浏览并切换（`/api/workspace`）。
+- `bash` 的 `cmd.Dir` 与 `read_file`/`write_file`/`glob`/`grep`/`list_dir`/`move`/`copy`/`delete` 的路径解析**同源**。
+- 相对路径以工作区为基准，绝对路径原样放行（显式行为，不是默认）。
 
 ## 远程节点执行（bash 分发到你的节点）
 
@@ -211,11 +232,14 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 
 ## Web UI
 
-`./gsh.exe -web` 启动（前端 embed 进二进制，零外部静态文件）：
+`./gsh.exe -web` 启动（前端 embed 进二进制，零外部静态文件），界面按 DSH 1:1 组织：
 
-- 暗色单页：会话侧栏 + 消息流 + 玻璃质感工具调用卡片（可折叠看 args/result）
+- **左侧栏**：品牌 / 新会话（`Ctrl+Alt+N`）/ 导航 / 工作区会话树（搜索、按时间筛选、右键重命名/删除、可折叠成图标栏）
+- **中栏**：标题栏 + 标准模式徽章 +「对话 / 轨迹」页签；消息流含用户气泡、markdown（标题/列表/表格/代码块复制/链接）、工具调用行（可展开看参数与结果）、状态行（完成/停止/失败）
+- **输入区**：附件上传（文本 ≤256KB，内容进上下文，回显抽成卡片）、权限三档切换、模型设置、发送/停止（`Esc` 中断）、底部统计
+- **右侧抽屉**：能力与环境——工具规格、技能列表、运行诊断（shell 候选链/解析结果/工作区/权限）
 - SSE 实时流：`tool_call → tool_result → delta(逐字) → final → done`
-- API：`POST /api/chat`（SSE）、`GET /api/sessions`、`GET /api/session?id=`
+- API：`POST /api/chat`（SSE）、`GET /api/state`、`GET /api/sessions`、`GET /api/session?id=`、`POST /api/session/{new,delete,rename}`、`POST /api/settings`（热更新并写回 config）、`GET/POST /api/permission`、`GET /api/workspace/browse`、`POST /api/workspace`、`GET /api/tools`
 - loop 的 `RunTraced`：工具调用/结果/最终回复以事件回调外露（DSH Trajectory 思想）
 
 ## Roadmap
@@ -230,5 +254,8 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 - [x] remote 支持外部命令后端（`exec`/`args`）：已有远程 shell 工具（如 rzsh）直接接成执行后端
 - [x] shell 选择配置化（候选链 / 严格显式 / 失败报错 / 非 POSIX 方言提示 + GBK 转码）
 - [x] 工具集扩展（15 个）+ 白名单裁剪 + skills 按需加载
+- [x] 权限三档（read_only/standard/full），运行期切换，registry 统一拦截
+- [x] 统一工作区：shell cwd 与文件工具路径解析同源
+- [x] Web UI 1:1（会话树/轨迹/附件/权限/设置/能力面板/重命名/搜索/筛选）
 - [ ] `delete_path` 之外的写操作统一审计日志（谁在什么时候动了什么）
 - [ ] 工具的 workspace 白名单（限制只能操作某个根目录）
