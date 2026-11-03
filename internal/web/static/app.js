@@ -44,6 +44,7 @@
     abort: null,
     lastTurn: null,      // {root, msgEl, text}
     pendingTools: [],    // 流式过程中的工具行
+    permission: 'standard',
   };
 
   const frame = $('#frame');
@@ -59,7 +60,7 @@
   // 工作区在侧栏只显示末级目录名（与 DSH 一致），完整路径放 tooltip。
   function baseName(p) {
     if (!p) return '';
-    const parts = String(p).split(/[\/]/).filter(Boolean);
+    const parts = String(p).split(/[\\\/]/).filter(Boolean);
     return parts.length ? parts[parts.length - 1] : p;
   }
 
@@ -367,8 +368,10 @@
       S.thinkingFormat = st.thinking_format || 'none';
       S.apiKeySet = !!st.api_key_set;
       S.workspace = st.workspace || '';
+      S.permission = st.permission || 'standard';
       S.sessions = st.sessions || [];
       $('#modelName').textContent = S.model || '未配置模型';
+      updatePermBtn();
       renderSidebar();
     } catch (e) {
       toast('加载失败：' + e.message, 'error');
@@ -598,8 +601,7 @@
   };
 
   $('#modelBtn').onclick = openSettings;
-  $('#permBtn').onclick = () =>
-    toast('当前权限：完全权限（allow_destructive 由配置决定）');
+  $('#permBtn').onclick = openPermission;
   $('#attachBtn').onclick = () => toast('附件上传待接入');
   $('#addWorkspace').onclick = () => openWorkspacePicker(S.workspace);
   $('#wsPicker').onclick = () => openWorkspacePicker(S.workspace);
@@ -698,6 +700,88 @@
     }
   };
   $('#btnRight').onclick = () => toast('右侧面板待接入');
+
+  // ---------- permission ----------
+
+  // 权限档位：三档，对应工具层的 Guard。
+  // 切换后下一次工具调用立即生效，不需要重启。
+  const PERM_OPTIONS = [
+    ['read_only', '只读', '仅读取与网络访问。不执行命令、不改文件。'],
+    ['standard', '标准', '可读写文件与执行命令。破坏性命令仍被拦截。'],
+    ['full', '完全权限', '破坏性命令放行。灾难性命令（如 rm -rf /）仍然拦截。'],
+  ];
+
+  function permLabelOf(mode) {
+    const hit = PERM_OPTIONS.find((o) => o[0] === mode);
+    return hit ? hit[1] : '标准';
+  }
+
+  function updatePermBtn() {
+    const btn = $('#permBtn');
+    btn.querySelector('span').textContent = permLabelOf(S.permission);
+    btn.title = '权限：' + permLabelOf(S.permission);
+  }
+
+  function openPermission() {
+    if ($('.modalMask')) return;
+
+    const mask = el('div', 'modalMask');
+    const modal = el('div', 'modal');
+    modal.appendChild(el('div', 'modalTitle', '权限'));
+    modal.appendChild(el('div', 'modalDesc', '决定 Agent 能对这台机器做什么。切换后下一次工具调用即生效。'));
+
+    const list = el('div', 'permList');
+    PERM_OPTIONS.forEach(([mode, label, desc]) => {
+      const row = el('button', 'permRow');
+      if (mode === S.permission) row.dataset.active = 'true';
+      const head = el('div', 'permHead');
+      head.appendChild(el('span', 'permName', label));
+      if (mode === S.permission) head.appendChild(el('span', 'permNow', '当前'));
+      row.appendChild(head);
+      row.appendChild(el('div', 'permDesc', desc));
+      row.onclick = async () => {
+        if (mode === S.permission) return;
+        try {
+          const d = await api('/api/permission', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode }),
+          });
+          S.permission = d.mode;
+          updatePermBtn();
+          close();
+          toast('权限已切换：' + (d.label || permLabelOf(d.mode)));
+        } catch (e) {
+          toast('切换失败：' + e.message, 'error');
+        }
+      };
+      list.appendChild(row);
+    });
+    modal.appendChild(list);
+
+    const foot = el('div', 'modalFoot');
+    const cancel = el('button', 'btn', '关闭');
+    foot.appendChild(cancel);
+    modal.appendChild(foot);
+
+    mask.appendChild(modal);
+    document.body.appendChild(mask);
+    const close = () => mask.remove();
+    cancel.onclick = close;
+    mask.onclick = (e) => {
+      if (e.target === mask) close();
+    };
+    document.addEventListener(
+      'keydown',
+      function esc(e) {
+        if (e.key === 'Escape') {
+          close();
+          document.removeEventListener('keydown', esc);
+        }
+      },
+      { once: true }
+    );
+  }
 
   // ---------- settings ----------
 

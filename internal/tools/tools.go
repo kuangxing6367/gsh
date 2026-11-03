@@ -33,6 +33,25 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 	ctx.Provide("toolRegistry", p.reg)
 
 	cfg := ctx.Config()
+
+	// 权限档位：permission 优先；只有旧字段 allow_destructive:true 时视为完全权限。
+	perm := PermStandard
+	if cfg != nil {
+		if v, ok := cfg["permission"].(string); ok && v != "" {
+			pv, err := ParsePerm(v)
+			if err != nil {
+				return err
+			}
+			perm = pv
+		} else if v, ok := cfg["allow_destructive"].(bool); ok && v {
+			perm = PermFull
+		}
+	}
+	guard := NewGuard(perm)
+	p.reg.guard = guard
+	// 权限是运行期状态：Web UI 切档后下一次工具调用立刻按新档位执行。
+	ctx.Provide("guard", guard)
+
 	ws := NewWorkspace(".")
 	if cfg != nil {
 		if v, ok := cfg["workspace"].(string); ok && v != "" {
@@ -45,7 +64,7 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 	// shell 的 cwd 与所有文件工具的路径解析必须同时切换。
 	ctx.Provide("workspace", ws)
 
-	bt := &BashTool{ws: ws}
+	bt := &BashTool{ws: ws, guard: guard}
 	if cfg != nil {
 		if v, ok := cfg["allow_destructive"].(bool); ok {
 			bt.allowDestructive = v
@@ -134,7 +153,7 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 		&MakeDirTool{ws: ws},
 		&MovePathTool{ws: ws},
 		&CopyPathTool{ws: ws},
-		&DeletePathTool{allowRecursive: bt.allowDestructive, ws: ws},
+		&DeletePathTool{allowRecursive: bt.allowDestructive, guard: guard, ws: ws},
 		&WebFetchTool{},
 		&HTTPRequestTool{},
 	}
@@ -183,6 +202,8 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 		} else {
 			fmt.Fprintf(&b, "shell 解析: %s（方言 %s）\n", sp.String(), sp.Family)
 		}
+		fmt.Fprintf(&b, "工作区: %s\n", ws.Root())
+		fmt.Fprintf(&b, "权限: %s（%s）\n", guard.Mode(), guard.Mode().Label())
 		fmt.Fprintf(&b, "工具 (%d): %s\n", len(p.reg.Names()), strings.Join(p.reg.Names(), ", "))
 		fmt.Fprintf(&b, "技能 (%d): %s\n", skills.Len(), strings.Join(skillNames(skills), ", "))
 		return b.String()
@@ -242,6 +263,9 @@ func sortedKeys(m map[string]bool) []string {
 type registry struct {
 	mu    sync.RWMutex
 	tools map[string]api.Tool
+	// guard 权限闸门：在唯一的执行入口上拦截，
+	// 避免「每个工具各写一遍检查、新增工具漏检」。
+	guard *Guard
 }
 
 func (r *registry) Register(t api.Tool) error {
@@ -264,6 +288,9 @@ func (r *registry) Execute(ctx context.Context, call api.ToolCall) api.ToolResul
 	r.mu.RUnlock()
 	if !ok {
 		return api.ToolResult{CallID: call.ID, Name: call.Name, Content: "unknown tool: " + call.Name, IsError: true}
+	}
+	if reason := r.guard.Check(call.Name); reason != "" {
+		return api.ToolResult{CallID: call.ID, Name: call.Name, Content: "error: " + reason, IsError: true}
 	}
 	out, err := t.Run(ctx, call.Args)
 	res := api.ToolResult{CallID: call.ID, Name: call.Name, Content: out}

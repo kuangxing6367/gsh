@@ -285,7 +285,16 @@ func copyAny(from, to string, info os.FileInfo, overwrite bool) error {
 type DeletePathTool struct {
 	// allowRecursive 允许删除非空目录（由 allow_destructive 决定）。
 	allowRecursive bool
+	guard          *Guard
 	ws             *Workspace
+}
+
+// recursiveAllowed 是否允许递归删除：运行期权限优先，其次静态配置。
+func (t *DeletePathTool) recursiveAllowed() bool {
+	if t.guard != nil && t.guard.AllowDestructive() {
+		return true
+	}
+	return t.allowRecursive
 }
 
 // Spec 工具描述。
@@ -335,10 +344,10 @@ func (t *DeletePathTool) Run(_ context.Context, argsJSON string) (string, error)
 	}
 	if len(entries) > 0 {
 		if !recursive {
-			return "", fmt.Errorf("目录非空（%d 项）：如需递归删除，传 recursive=true 且配置 allow_destructive=true", len(entries))
+			return "", fmt.Errorf("目录非空（%d 项）：如需递归删除，传 recursive=true 且把权限切到「完全权限」", len(entries))
 		}
-		if !t.allowRecursive {
-			return "", fmt.Errorf("递归删除目录被拦截（受限）：需在 config.json 的 plugins_cfg.tools 设 allow_destructive: true")
+		if !t.recursiveAllowed() {
+			return "", fmt.Errorf("递归删除目录被拦截（受限）：需在输入区把权限切到「完全权限」，或配置 plugins_cfg.tools.permission: full")
 		}
 		if err := os.RemoveAll(path); err != nil {
 			return "", err

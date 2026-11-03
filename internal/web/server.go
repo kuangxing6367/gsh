@@ -84,6 +84,9 @@ func (s *Server) Run(k *kernel.Kernel) error {
 		reg:   reg,
 		runs:  map[string]context.CancelFunc{},
 	}
+	if g, err := kernel.Use[*tools.Guard](k, "guard"); err == nil {
+		w.guard = g
+	}
 	mux.HandleFunc("GET /api/state", w.handleState)
 	mux.HandleFunc("GET /api/sessions", w.handleSessions)
 	mux.HandleFunc("GET /api/session", w.handleSessionDetail)
@@ -92,6 +95,8 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	mux.HandleFunc("POST /api/chat", w.handleChat)
 	mux.HandleFunc("POST /api/stop", w.handleStop)
 	mux.HandleFunc("POST /api/settings", w.handleSettings)
+	mux.HandleFunc("GET /api/permission", w.handlePermissionGet)
+	mux.HandleFunc("POST /api/permission", w.handlePermissionSet)
 	mux.HandleFunc("GET /api/workspace/browse", w.handleBrowse)
 	mux.HandleFunc("POST /api/workspace", w.handleSetWorkspace)
 
@@ -104,6 +109,7 @@ type webAPI struct {
 	loop  api.Loop
 	store api.SessionStore
 	reg   api.ToolRegistry
+	guard *tools.Guard
 
 	mu   sync.Mutex
 	runs map[string]context.CancelFunc
@@ -119,15 +125,17 @@ func (w *webAPI) handleState(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(rw, map[string]any{
-		"model":           w.llmString("model"),
-		"provider":        w.llmString("provider"),
-		"base_url":        w.llmString("base_url"),
-		"thinking_format": w.llmString("thinking_format"),
-		"api_key_set":     w.llmString("api_key") != "",
-		"workspace":       w.wsRoot(),
-		"tools":           w.toolNames(),
-		"sessions":        metas,
-		"now":             time.Now().Format(time.RFC3339),
+		"model":            w.llmString("model"),
+		"provider":         w.llmString("provider"),
+		"base_url":         w.llmString("base_url"),
+		"thinking_format":  w.llmString("thinking_format"),
+		"api_key_set":      w.llmString("api_key") != "",
+		"workspace":        w.wsRoot(),
+		"permission":       w.permName(),
+		"permission_label": w.permLabel(),
+		"tools":            w.toolNames(),
+		"sessions":         metas,
+		"now":              time.Now().Format(time.RFC3339),
 	})
 }
 
@@ -372,6 +380,62 @@ func (w *webAPI) wsRoot() string {
 		return ws.Root()
 	}
 	return "."
+}
+
+// ---------- permission ----------
+
+// permName / permLabel 当前权限档位，供首屏与状态栏显示。
+func (w *webAPI) permName() string {
+	if w.guard == nil {
+		return "standard"
+	}
+	return w.guard.Mode().String()
+}
+
+func (w *webAPI) permLabel() string {
+	if w.guard == nil {
+		return "标准"
+	}
+	return w.guard.Mode().Label()
+}
+
+// handlePermissionGet GET → 当前档位与可选项。
+func (w *webAPI) handlePermissionGet(rw http.ResponseWriter, _ *http.Request) {
+	writeJSON(rw, map[string]any{
+		"mode":  w.permName(),
+		"label": w.permLabel(),
+		"options": []map[string]string{
+			{"mode": "read_only", "label": "只读", "desc": "仅读取与网络访问，不执行命令、不改文件"},
+			{"mode": "standard", "label": "标准", "desc": "可读写文件与执行命令，破坏性命令仍被拦截"},
+			{"mode": "full", "label": "完全权限", "desc": "破坏性命令放行（灾难性命令仍然拦截）"},
+		},
+	})
+}
+
+// handlePermissionSet POST → 切换档位，下一次工具调用即生效。
+func (w *webAPI) handlePermissionSet(rw http.ResponseWriter, r *http.Request) {
+	if w.guard == nil {
+		httpError(rw, http.StatusServiceUnavailable, "permission guard not available")
+		return
+	}
+	var req map[string]any
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil {
+		httpError(rw, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		httpError(rw, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	mode, _ := req["mode"].(string)
+	p, err := tools.ParsePerm(mode)
+	if err != nil {
+		httpError(rw, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.guard.Set(p)
+	writeJSON(rw, map[string]any{"mode": p.String(), "label": p.Label()})
 }
 
 // ---------- settings ----------

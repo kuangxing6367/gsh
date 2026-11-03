@@ -105,7 +105,8 @@ type NodeSpec struct {
 // allowDestructive=false 时，破坏性/灾难性命令被安全策略拦截（见 safety.go），远程同样先本地扫描再下发。
 // workspace 非空时，本地命令在该目录内执行。
 type BashTool struct {
-	allowDestructive bool
+	allowDestructive bool // 静态配置开关（测试用）；运行期以 guard 为准
+	guard            *Guard
 	requireShell     bool // true：无 shell 直接报错，不允许降级为直连执行
 	ws               *Workspace
 	nodes            map[string]NodeSpec
@@ -115,6 +116,14 @@ type BashTool struct {
 	shellPick        ShellSpec
 	shellCands       []ShellCandidate
 	shellErr         error
+}
+
+// destructiveAllowed 是否放行破坏性命令：运行期权限优先，其次静态配置。
+func (t *BashTool) destructiveAllowed() bool {
+	if t.guard != nil && t.guard.AllowDestructive() {
+		return true
+	}
+	return t.allowDestructive
 }
 
 // Spec 工具描述。
@@ -162,8 +171,8 @@ func (t *BashTool) Run(ctx context.Context, argsJSON string) (string, error) {
 	}
 	if always, gated := scanCommand(scanTarget); always != "" {
 		return "", fmt.Errorf("命令被安全策略拦截（致命）：%s", always)
-	} else if gated != "" && !t.allowDestructive {
-		return "", fmt.Errorf("命令被安全策略拦截（受限）：%s\n（如需放行，在 config.json 的 plugins_cfg.tools 设 allow_destructive: true）", gated)
+	} else if gated != "" && !t.destructiveAllowed() {
+		return "", fmt.Errorf("命令被安全策略拦截（受限）：%s\n（如需放行，在输入区把权限切到「完全权限」，或配置 plugins_cfg.tools.permission: full）", gated)
 	}
 
 	timeout := 120 * time.Second
