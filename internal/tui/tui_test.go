@@ -102,7 +102,7 @@ func TestTUIStreamFlow(t *testing.T) {
 
 func TestArgSummary(t *testing.T) {
 	cases := map[string]string{
-		`{"command":"uptime"}`:      "uptime",
+		`{"command":"uptime"}`:       "uptime",
 		`{"pattern":"Home.*button"}`: "Home.*button",
 		`{"path":"a/b.go"}`:          "a/b.go",
 		``:                           "",

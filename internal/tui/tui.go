@@ -300,11 +300,12 @@ func (m *Model) renderContent() {
 		case roleAsst:
 			txt := dm.text
 			if m.running && strings.TrimSpace(txt) == "" {
-				b.WriteString(styleMuted.Width(w - 2).Render("~ 思考中…"))
+				b.WriteString(styleMuted.Render("  ~ 思考中…"))
 			} else {
-				b.WriteString(styleText.Width(w - 2).Render(txt))
+				// 助手回复按 markdown 渲染（标题/粗体/行内码/代码块/列表/引用）。
+				b.WriteString(renderMarkdown(txt, w-2))
 			}
-			b.WriteString("\n\n")
+			b.WriteString("\n")
 		case roleTool:
 			b.WriteString(renderToolLine(dm))
 			b.WriteString("\n")
