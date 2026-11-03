@@ -24,6 +24,7 @@ func main() {
 		headless = flag.String("e", "", "execute one prompt then exit (headless)")
 		webMode  = flag.Bool("web", false, "start web UI server")
 		webAddr  = flag.String("addr", ":8934", "web listen address (with -web)")
+		tuiMode  = flag.Bool("tui", false, "start opencode-style terminal UI")
 		showVer  = flag.Bool("v", false, "print version and loaded plugins")
 		verbose  = flag.Bool("verbose", false, "print loaded plugins")
 		listTool = flag.Bool("tools", false, "print resolved shell / enabled tools / skills then exit")
@@ -60,6 +61,10 @@ func main() {
 
 	ctx := context.Background()
 	switch {
+	case *tuiMode:
+		if err := h.RunTUI(); err != nil {
+			fatal(err)
+		}
 	case *webMode:
 		fmt.Printf("gsh web UI → http://localhost%s\n", *webAddr)
 		if err := h.Serve(*webAddr); err != nil {

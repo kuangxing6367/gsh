@@ -1,6 +1,6 @@
 # gsh
 
-DSH（DeepSeek Harness）思想的 Go 重写：**一切皆插件** 的 agent harness，零第三方依赖、单二进制。
+DSH（DeepSeek Harness）思想的 Go 重写：**一切皆插件** 的 agent harness。核心内核零标准库依赖、单二进制；终端 TUI 前端基于 bubbletea（charmbracelet 生态，静态链接进同一个单二进制，仍是单文件分发、可自托管）。
 
 ## 为什么重写
 
@@ -32,6 +32,7 @@ cp config.example.json config.json   # 填 api_key
 ./gsh.exe -e "数一下 internal 下有几个 Go 文件"   # headless
 ./gsh.exe                                          # REPL
 ./gsh.exe -web                                      # Web UI → http://localhost:8934
+./gsh.exe -tui                                      # opencode 风格终端 UI（bubbletea）
 ./gsh.exe -tools                                    # 看当前用哪个 shell、启用了哪些工具、装了哪些技能
 ```
 
@@ -93,6 +94,7 @@ internal/
   loop/     agent 主循环：模型 ↔ 工具，最大 24 轮保护，RunTraced 事件流
   ui/       REPL + headless(-e)
   web/      Web UI 插件（embed 前端 + SSE + 会话 API）
+  tui/      TUI 插件（bubbletea）：opencode 风格终端界面，复用 loop 的流式事件
 ```
 
 插件装载序固定：`session → tools → llm → loop → web → ui`。
@@ -242,6 +244,27 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 - API：`POST /api/chat`（SSE）、`GET /api/state`、`GET /api/sessions`、`GET /api/session?id=`、`POST /api/session/{new,delete,rename}`、`POST /api/settings`（热更新并写回 config）、`GET/POST /api/permission`、`GET /api/workspace/browse`、`POST /api/workspace`、`GET /api/tools`
 - loop 的 `RunTraced`：工具调用/结果/最终回复以事件回调外露（DSH Trajectory 思想）
 
+## 终端 UI（TUI）
+
+`./gsh.exe -tui` 启动 opencode 风格终端界面（bubbletea 实现，视觉 1:1 对齐 opencode 的暗色语言）：
+
+- 近黑画布 `#080808` + 磷光绿强调 `#50fa7b` + 等宽硬边（Dracula 系配色）
+- **顶栏**：品牌 + 会话 id + 运行态
+- **消息区**：用户气泡（绿色 `›` 前缀）、助手流式回复、工具行（`✓/✗` 状态 + 摘要）
+- **底栏**：输入框（`›` 提示符，Enter 发送 / Shift+Enter 换行）
+- 交互：Enter 发送、Esc 停止当前轮、Ctrl+C 退出
+- 复用内核的 `loop.RunSession`：流式 delta 与 `tool_call/tool_result` 事件经 channel 回流，逐字流与工具行实时更新——TUI 只是 loop 的新展示面，与 Web UI、REPL 对等
+
+## 操作审计日志
+
+gsh 作为未来嵌进沙箱 / 运维体系的 harness，操作可追溯是刚需。`registry.Execute`（工具唯一执行入口）每次调用都会记一条 append-only 审计记录，落 `<data_dir>/tools/audit/audit.log`（JSONL）：
+
+- 三种动作：`denied`（工具不存在）/ `blocked`（被权限闸门拦）/ `execute`（真实执行）
+- 字段：时间戳、会话 id、工具名、**脱敏后的参数**、远程节点、权限档位、成功与否、错误摘要、结果长度（不记内容）、耗时
+- **参数脱敏**：敏感键名（api_key/token/secret/password…）整体掩码；命令/值里偶发的 `sk-…`/`Bearer …`/`key=…` 也掩码。**绝不记工具输出原文或文件内容**
+- 默认开启；`plugins_cfg.tools.audit: false` 关闭
+- 查询：`GET /api/audit?n=200`（Web 侧可消费）；`Recent(n)` 读尾 n 行
+
 ## Roadmap
 
 - [x] Web UI 插件（对应 DSH web 模式）
@@ -257,5 +280,7 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 - [x] 权限三档（read_only/standard/full），运行期切换，registry 统一拦截
 - [x] 统一工作区：shell cwd 与文件工具路径解析同源
 - [x] Web UI 1:1（会话树/轨迹/附件/权限/设置/能力面板/重命名/搜索/筛选）
-- [ ] `delete_path` 之外的写操作统一审计日志（谁在什么时候动了什么）
+- [x] 终端 TUI（bubbletea，opencode 风格 1:1，复用 loop 流式事件）
+- [x] 操作审计日志（落盘 + 脱敏 + 查询 API；Web 展示面板待做）
+- [ ] 审计日志的 Web 展示面板（查询 API 已就绪）
 - [ ] 工具的 workspace 白名单（限制只能操作某个根目录）

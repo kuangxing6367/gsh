@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"gsh/internal/api"
 	"gsh/internal/kernel"
@@ -29,10 +30,25 @@ func (p *Plugin) Name() string { return "tools" }
 
 // Apply 注册 ToolRegistry 服务，并把内建工具挂进去。
 func (p *Plugin) Apply(ctx *kernel.Ctx) error {
+	cfg := ctx.Config()
 	p.reg = &registry{}
 	ctx.Provide("toolRegistry", p.reg)
 
-	cfg := ctx.Config()
+	// 操作审计日志：默认开启，plugins_cfg.tools.audit=false 关闭。
+	// 关闭后 Record 是 no-op，不影响任何执行路径。
+	auditEnabled := true
+	if cfg != nil {
+		if v, ok := cfg["audit"].(bool); ok {
+			auditEnabled = v
+		}
+	}
+	auditLog, err := NewAuditLog(ctx.DataDir(), auditEnabled)
+	if err != nil {
+		return err
+	}
+	ctx.Provide("audit", auditLog)
+	ctx.OnShutdown(func() { _ = auditLog.Close() })
+	p.reg.audit = auditLog
 
 	// 权限档位：permission 优先；只有旧字段 allow_destructive:true 时视为完全权限。
 	perm := PermStandard
@@ -268,6 +284,9 @@ type registry struct {
 	// guard 权限闸门：在唯一的执行入口上拦截，
 	// 避免「每个工具各写一遍检查、新增工具漏检」。
 	guard *Guard
+	// audit 操作审计日志：同样挂在唯一入口上，保证每一条调用（含被拦/不存在）
+	// 都被记录，新增工具无需各自埋点。
+	audit *AuditLog
 }
 
 func (r *registry) Register(t api.Tool) error {
@@ -285,18 +304,32 @@ func (r *registry) Register(t api.Tool) error {
 }
 
 func (r *registry) Execute(ctx context.Context, call api.ToolCall) api.ToolResult {
+	start := time.Now()
+	perm := "standard"
+	if r.guard != nil {
+		perm = r.guard.Mode().String()
+	}
+	node := ""
+	if m, e := argObj(call.Args); e == nil {
+		node = argStr(m, "node")
+	}
+
 	r.mu.RLock()
 	t, ok := r.tools[call.Name]
 	r.mu.RUnlock()
 	if !ok {
+		r.audit.recordFromCall(ctx, call, node, "denied", "unknown tool: "+call.Name, perm, false, nil, 0, time.Since(start).Milliseconds())
 		return api.ToolResult{CallID: call.ID, Name: call.Name, Content: "unknown tool: " + call.Name, IsError: true}
 	}
 	if reason := r.guard.Check(call.Name); reason != "" {
+		r.audit.recordFromCall(ctx, call, node, "blocked", reason, perm, false, nil, 0, time.Since(start).Milliseconds())
 		return api.ToolResult{CallID: call.ID, Name: call.Name, Content: "error: " + reason, IsError: true}
 	}
 	out, err := t.Run(ctx, call.Args)
 	res := api.ToolResult{CallID: call.ID, Name: call.Name, Content: out}
+	ok2 := true
 	if err != nil {
+		ok2 = false
 		res.IsError = true
 		if out == "" {
 			res.Content = "error: " + err.Error()
@@ -304,6 +337,7 @@ func (r *registry) Execute(ctx context.Context, call api.ToolCall) api.ToolResul
 			res.Content = out + "\nerror: " + err.Error()
 		}
 	}
+	r.audit.recordFromCall(ctx, call, node, "execute", "", perm, ok2, err, len(out), time.Since(start).Milliseconds())
 	return res
 }
 

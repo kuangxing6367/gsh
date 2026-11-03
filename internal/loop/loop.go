@@ -119,7 +119,9 @@ func (l *agentLoop) run(
 		}
 		for _, call := range assistant.ToolCalls {
 			emit(api.Event{Kind: api.EventToolCall, ID: call.ID, Name: call.Name, Args: call.Args})
-			res := reg.Execute(ctx, call)
+			// 把会话 id 注入 ctx，让工具执行入口的审计能关联到「哪个会话」。
+			execCtx := context.WithValue(ctx, api.AuditSessionKey, sess.ID())
+			res := reg.Execute(execCtx, call)
 			emit(api.Event{Kind: api.EventToolResult, ID: res.CallID, Name: res.Name, Data: res.Content, Err: res.IsError})
 			if err := sess.Append(api.Message{
 				Role:       api.RoleTool,

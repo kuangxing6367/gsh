@@ -135,3 +135,11 @@ type ToolRegistry interface {
 	Specs() []ToolSpec
 	Names() []string
 }
+
+// ctxKey 是 gsh 内部 context 键的类型（避免与第三方包字符串键冲突）。
+type ctxKey string
+
+// AuditSessionKey 工具执行时携带 session id 的 context 键。
+// loop 在调用 ToolRegistry.Execute 前把当前会话 id 注入 ctx，
+// 审计服务据此把「某次工具调用」关联到「哪个会话」，而不是只记一坨匿名事件。
+const AuditSessionKey ctxKey = "audit.session"

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -87,6 +88,9 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	if g, err := kernel.Use[*tools.Guard](k, "guard"); err == nil {
 		w.guard = g
 	}
+	if a, err := kernel.Use[*tools.AuditLog](k, "audit"); err == nil {
+		w.audit = a
+	}
 	mux.HandleFunc("GET /api/state", w.handleState)
 	mux.HandleFunc("GET /api/sessions", w.handleSessions)
 	mux.HandleFunc("GET /api/session", w.handleSessionDetail)
@@ -101,6 +105,7 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	mux.HandleFunc("POST /api/permission", w.handlePermissionSet)
 	mux.HandleFunc("GET /api/workspace/browse", w.handleBrowse)
 	mux.HandleFunc("POST /api/workspace", w.handleSetWorkspace)
+	mux.HandleFunc("GET /api/audit", w.handleAudit)
 
 	srv := &http.Server{Addr: s.addr, Handler: mux}
 	return srv.ListenAndServe()
@@ -112,6 +117,7 @@ type webAPI struct {
 	store api.SessionStore
 	reg   api.ToolRegistry
 	guard *tools.Guard
+	audit *tools.AuditLog
 
 	mu   sync.Mutex
 	runs map[string]context.CancelFunc
@@ -137,6 +143,7 @@ func (w *webAPI) handleState(rw http.ResponseWriter, r *http.Request) {
 		"permission_label": w.permLabel(),
 		"tools":            w.toolNames(),
 		"sessions":         metas,
+		"audit_enabled":    w.audit != nil && w.audit.Enabled(),
 		"now":              time.Now().Format(time.RFC3339),
 	})
 }
@@ -451,6 +458,31 @@ func (w *webAPI) handleTools(rw http.ResponseWriter, _ *http.Request) {
 		"permission": w.permName(),
 		"workspace":  w.wsRoot(),
 	})
+}
+
+// ---------- audit ----------
+
+// handleAudit GET ?n= → 最近 n 条操作审计记录（新→旧，最多 1000）。
+// enabled=false 时返回空列表（审计被 config 关闭）。
+func (w *webAPI) handleAudit(rw http.ResponseWriter, r *http.Request) {
+	n := 100
+	if v := r.URL.Query().Get("n"); v != "" {
+		if x, err := strconv.Atoi(v); err == nil && x > 0 {
+			n = x
+		}
+	}
+	if n > 1000 {
+		n = 1000
+	}
+	entries := []tools.AuditEntry{}
+	enabled := false
+	if w.audit != nil {
+		enabled = true
+		if es, err := w.audit.Recent(n); err == nil {
+			entries = es
+		}
+	}
+	writeJSON(rw, map[string]any{"enabled": enabled, "entries": entries})
 }
 
 // ---------- permission ----------

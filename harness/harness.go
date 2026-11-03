@@ -20,6 +20,7 @@ import (
 	"gsh/internal/loop"
 	"gsh/internal/session"
 	"gsh/internal/tools"
+	"gsh/internal/tui"
 	"gsh/internal/ui"
 	"gsh/internal/web"
 )
@@ -91,6 +92,11 @@ func (h *Harness) RunREPL(ctx context.Context) error {
 	return ui.RunREPL(ctx, func(ctx context.Context, in string, d api.StreamDelta) (string, error) {
 		return lp.RunTraced(ctx, in, d, ui.PrintTrace)
 	})
+}
+
+// RunTUI 启动 opencode 风格的终端 UI（阻塞）。复用内核的 loop / session 服务。
+func (h *Harness) RunTUI() error {
+	return tui.Run(h.k)
 }
 
 // RunHeadless 一次性执行模式：单条输入 → 回复 → 退出。工具调用/结果会打印到终端。
