@@ -39,12 +39,15 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 			bt.allowDestructive = v
 		}
 		// shell 候选链：配置优先，缺省用平台默认链（见 shell.go）。
+		// 显式指定（"bash" / ["bash","sh"]）意味着「我就用这个」，
+		// 探测不到时应当硬报错，而不是悄悄降级成直连执行。
 		if raw, ok := cfg["shell"]; ok {
-			chain, _, err := parseShellConfig(raw)
+			chain, explicit, err := parseShellConfig(raw)
 			if err != nil {
 				return err
 			}
 			bt.shellChain = chain
+			bt.requireShell = explicit
 		}
 		if v, ok := cfg["workspace"].(string); ok && v != "" {
 			bt.workspace = v
@@ -163,10 +166,13 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 			names = append(names, sp.String())
 		}
 		fmt.Fprintf(&b, "shell 候选链: %s\n", strings.Join(names, " → "))
-		if sp, err := bt.pickShell(); err != nil {
+		if sp, cands, err := bt.pickShell(context.Background()); err != nil {
 			fmt.Fprintf(&b, "shell 解析: 失败 — %v\n", err)
+			for _, c := range cands {
+				fmt.Fprintf(&b, "  - %-12s %s\n", c.Spec.Bin, c.Reason)
+			}
 		} else {
-			fmt.Fprintf(&b, "shell 解析: %s\n", sp.String())
+			fmt.Fprintf(&b, "shell 解析: %s（方言 %s）\n", sp.String(), sp.Family)
 		}
 		fmt.Fprintf(&b, "工具 (%d): %s\n", len(p.reg.Names()), strings.Join(p.reg.Names(), ", "))
 		fmt.Fprintf(&b, "技能 (%d): %s\n", skills.Len(), strings.Join(skillNames(skills), ", "))
@@ -302,4 +308,19 @@ func argStr(m map[string]any, key string) string {
 		return v
 	}
 	return ""
+}
+
+// argStrs 读字符串数组参数（如 argv）。元素非字符串时跳过，避免整体失败。
+func argStrs(m map[string]any, key string) []string {
+	arr, ok := m[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, ok := item.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

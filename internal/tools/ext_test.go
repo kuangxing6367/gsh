@@ -74,10 +74,49 @@ func TestResolveShellReportsTried(t *testing.T) {
 // TestBashToolExplicitMissingShell 显式配了不存在的 shell 时必须硬报错，
 // 而不是悄悄换一种方言继续跑。
 func TestBashToolExplicitMissingShell(t *testing.T) {
-	bt := &BashTool{shellChain: []ShellSpec{{Bin: "definitely-not-a-shell-xyz", Args: []string{"-c"}}}}
+	bt := &BashTool{
+		shellChain:   []ShellSpec{{Bin: "definitely-not-a-shell-xyz", Args: []string{"-c"}}},
+		requireShell: true,
+	}
 	_, err := bt.Run(context.Background(), `{"command":"echo hi"}`)
 	if err == nil || !strings.Contains(err.Error(), "找不到可用的 shell") {
 		t.Fatalf("explicit missing shell must fail loudly, got %v", err)
+	}
+}
+
+// TestBashToolDegradesWithoutShell 没有 shell 且未强制要求时，
+// 单条命令应降级为直连执行，而不是让整个工具报废。
+func TestBashToolDegradesWithoutShell(t *testing.T) {
+	bt := &BashTool{shellChain: []ShellSpec{{Bin: "definitely-not-a-shell-xyz", Args: []string{"-c"}}}}
+	got, err := bt.Run(context.Background(), `{"command":"echo degraded-ok"}`)
+	if err != nil {
+		t.Fatalf("expected degraded execution to succeed, got %v", err)
+	}
+	if !strings.Contains(got, "degraded-ok") {
+		t.Fatalf("degraded run produced no stdout: %q", got)
+	}
+	if !strings.Contains(got, "无可用 shell") {
+		t.Fatalf("degraded run must state the limitation, got %q", got)
+	}
+}
+
+// TestBashToolDegradeRejectsShellSyntax 用到管道/重定向时不能半执行。
+func TestBashToolDegradeRejectsShellSyntax(t *testing.T) {
+	bt := &BashTool{shellChain: []ShellSpec{{Bin: "definitely-not-a-shell-xyz", Args: []string{"-c"}}}}
+	if _, err := bt.Run(context.Background(), `{"command":"echo a | cat"}`); err == nil {
+		t.Fatal("pipeline must be rejected when no shell is available")
+	}
+}
+
+// TestBashToolArgvBypassesShell argv 形式不依赖任何 shell。
+func TestBashToolArgvBypassesShell(t *testing.T) {
+	bt := &BashTool{shellChain: []ShellSpec{{Bin: "definitely-not-a-shell-xyz"}}, requireShell: true}
+	got, err := bt.Run(context.Background(), `{"argv":["echo","argv-ok"]}`)
+	if err != nil {
+		t.Fatalf("argv form must not need a shell: %v", err)
+	}
+	if !strings.Contains(got, "argv-ok") {
+		t.Fatalf("got %q", got)
 	}
 }
 
@@ -225,5 +264,60 @@ func TestHTMLToText(t *testing.T) {
 		if strings.Contains(out, bad) {
 			t.Fatalf("htmlToText left %q in:\n%s", bad, out)
 		}
+	}
+}
+
+// TestSplitCommand 引号与转义规则。
+func TestSplitCommand(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`echo hi`, []string{"echo", "hi"}},
+		{`echo "a b"`, []string{"echo", "a b"}},
+		{`echo 'a "b" c'`, []string{"echo", `a "b" c`}},
+		{`echo a\ b`, []string{"echo", "a b"}},
+		{`echo ""`, []string{"echo", ""}},
+		{`  ls   -la  `, []string{"ls", "-la"}},
+	}
+	for _, c := range cases {
+		got, err := splitCommand(c.in)
+		if err != nil {
+			t.Fatalf("%q: %v", c.in, err)
+		}
+		if strings.Join(got, "\x00") != strings.Join(c.want, "\x00") {
+			t.Fatalf("%q → %#v, want %#v", c.in, got, c.want)
+		}
+	}
+	if _, err := splitCommand(`echo "unclosed`); err == nil {
+		t.Fatal("unclosed quote must error")
+	}
+	if _, err := splitCommand(`   `); err == nil {
+		t.Fatal("empty command must error")
+	}
+}
+
+// TestNeedsShell shell 语义检测必须忽略引号内的字符。
+func TestNeedsShell(t *testing.T) {
+	if _, ok := needsShell(`echo "a|b"`); ok {
+		t.Fatal("pipe inside quotes is not a pipe")
+	}
+	if _, ok := needsShell(`echo a | cat`); !ok {
+		t.Fatal("real pipe must be detected")
+	}
+	if _, ok := needsShell(`echo "a > b"`); ok {
+		t.Fatal("redirect inside quotes must be ignored")
+	}
+}
+
+// TestShellQuote 还原成命令行后必须能被 splitCommand 拆回原样。
+func TestShellQuote(t *testing.T) {
+	in := []string{"echo", "a b", "it's", `quote"d`}
+	back, err := splitCommand(shellQuote(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(back, "\x00") != strings.Join(in, "\x00") {
+		t.Fatalf("round trip mismatch: %#v vs %#v", back, in)
 	}
 }
