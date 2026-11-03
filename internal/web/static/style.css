@@ -1225,6 +1225,29 @@ svg { display: block; }
 }
 .wsSearch:focus { border-color: var(--border-l4); }
 
+/* ---------- message copy ---------- */
+.msgWrap { position: relative; }
+.msgCopy {
+  position: absolute;
+  top: 0;
+  left: -30px;
+  display: inline-flex;
+  border: 0;
+  background: transparent;
+  color: var(--label-tertiary);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: var(--radius-s);
+  opacity: 0;
+  transition: opacity 0.15s var(--ease), color 0.15s var(--ease);
+}
+.userRow .msgCopy {
+  position: static;
+  opacity: 0;
+}
+.turn:hover .msgCopy { opacity: 1; }
+.msgCopy:hover { color: var(--label-primary); background: var(--hover); }
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 1024px) {

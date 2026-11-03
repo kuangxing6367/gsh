@@ -47,6 +47,7 @@
     permission: 'standard',
     attachments: [],     // 待发送附件 {name,size,text}
     search: '',          // 侧栏会话搜索关键字
+    filter: 'all',       // 会话时间筛选：all|today|3d
   };
 
   const frame = $('#frame');
@@ -130,9 +131,11 @@
     group.appendChild(ws);
 
     const q = (S.search || '').trim().toLowerCase();
+    const f = FILTERS.find((x) => x[0] === S.filter) || FILTERS[0];
+    const byTime = S.sessions.filter(f[2]);
     const shown = q
-      ? S.sessions.filter((x) => String(x.title || '').toLowerCase().includes(q)).slice(0, 30)
-      : S.sessions.slice(0, 12);
+      ? byTime.filter((x) => String(x.title || '').toLowerCase().includes(q)).slice(0, 30)
+      : byTime.slice(0, 12);
     shown.forEach((s) => {
       const item = el('button', 'convItem');
       item.dataset.id = s.id;
@@ -175,7 +178,7 @@
     content = String(content == null ? '' : content);
     const list = (atts || []).slice();
     content = content
-      .replace(/\n--- 附件 ([^\n]+?) ---\n([\s\S]*?)\n--- 附件结束 ---/g, (m, head, body) => {
+      .replace(/\n--- 附件 ([^\n]*?)---\n([\s\S]*?)\n--- 附件结束 ---/g, (m, head, body) => {
         const name = head.replace(/（[^）]*）$/, '').trim();
         list.push({ name: name, size: body.length, text: body });
         return '';
@@ -195,16 +198,29 @@
     }
     row.appendChild(el('div', 'userBubble', content));
     if (iso) row.appendChild(el('div', 'userMeta', timeLabel(iso)));
+    const ucopy = el('button', 'msgCopy');
+    ucopy.dataset.target = 'user';
+    ucopy.appendChild(svg('i-copy', 11));
+    ucopy.title = '复制';
+    row.appendChild(ucopy);
     t.root.appendChild(row);
     return t;
   }
 
   function ensureAssistant(t) {
     if (!t.msgEl) {
-      t.msgEl = el('div', 'msg');
+      t.msgEl = el('div', 'msgWrap');
+      const acopy = el('button', 'msgCopy');
+      acopy.dataset.target = 'assistant';
+      acopy.appendChild(svg('i-copy', 11));
+      acopy.title = '复制';
+      t.msgEl.appendChild(acopy);
+      const body = el('div', 'msg');
+      t.msgEl.appendChild(body);
+      t.msgBody = body;
       t.root.appendChild(t.msgEl);
     }
-    return t.msgEl;
+    return t.msgBody || t.msgEl;
   }
 
   function appendAssistantText(t, text) {
@@ -899,8 +915,35 @@
     };
   }
 
+  // 筛选：按时间圈定侧栏会话范围。会话一多，「全部」列表就没法用。
+  const FILTERS = [
+    ['all', '全部会话', () => true],
+    ['today', '今天', (x) => Date.now() - new Date(x.updated).getTime() < 86400e3],
+    ['3d', '最近三天', (x) => Date.now() - new Date(x.updated).getTime() < 3 * 86400e3],
+  ];
+
+  function openFilterMenu(e) {
+    closeConvMenu();
+    const menu = el('div', 'contextMenu');
+    menu.style.left = Math.min(e.clientX, window.innerWidth - 180) + 'px';
+    menu.style.top = Math.min(e.clientY, window.innerHeight - 140) + 'px';
+    FILTERS.forEach(([key, label]) => {
+      const it = el('button', 'ctxItem', (S.filter === key ? '· ' : '') + label);
+      it.onclick = () => {
+        S.filter = key;
+        closeConvMenu();
+        renderSidebar();
+        toast('筛选：' + label);
+      };
+      menu.appendChild(it);
+    });
+    document.body.appendChild(menu);
+    setTimeout(() => document.addEventListener('click', closeConvMenu), 0);
+  }
+
   document.querySelectorAll('.wsHeaderActions .iconBtn').forEach((b, i) => {
     if (i === 0) b.onclick = toggleSearch;
+    else if (i === 1) b.onclick = (e) => openFilterMenu(e);
   });
 
   // ---------- drawer：能力与环境 ----------
@@ -1226,8 +1269,19 @@
     return steps;
   }
 
-  // 代码块复制（事件委托）
+  // 代码块复制 + 整条消息复制（事件委托）
   chatEl.addEventListener('click', (e) => {
+    const msgCopy = e.target.closest('.msgCopy');
+    if (msgCopy) {
+      const host = msgCopy.dataset.target === 'user' ? msgCopy.closest('.userRow') : msgCopy.closest('.msgWrap');
+      const bubble = host && (host.querySelector('.userBubble') || host.querySelector('.msg'));
+      const text = bubble ? bubble.innerText : '';
+      navigator.clipboard.writeText(text).then(
+        () => toast('已复制'),
+        () => toast('复制失败', 'error')
+      );
+      return;
+    }
     const btn = e.target.closest('.copyBtn');
     if (!btn) return;
     const pre = btn.closest('.codeBlock').querySelector('pre');
@@ -1240,11 +1294,15 @@
     );
   });
 
-  // Ctrl+Alt+N 新会话
+  // Ctrl+Alt+N 新会话；Esc 停止运行中的任务
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.altKey && (e.key === 'n' || e.key === 'N')) {
       e.preventDefault();
       newSession();
+      return;
+    }
+    if (e.key === 'Escape' && S.running && !$('.modalMask') && !$('.contextMenu')) {
+      stopRun();
     }
   });
 
