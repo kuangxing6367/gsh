@@ -104,6 +104,7 @@ type Kernel struct {
 	plugins  map[string]Plugin
 
 	cfg       *Config
+	cfgPath   string
 	disposers []struct {
 		name string
 		fn   func()
@@ -117,6 +118,8 @@ type Config struct {
 	Plugins []string                  `json:"plugins"`     // 启用的插件名，按序装载
 	Options map[string]map[string]any `json:"plugins_cfg"` // 每插件配置节
 	DataDir string                    `json:"data_dir"`    // 数据根目录
+	// Path 配置文件的绝对路径（不参与序列化）。设置面板据此写回。
+	Path string `json:"-"`
 }
 
 func (k *Kernel) pluginConfig(name string) map[string]any {
@@ -131,8 +134,37 @@ func (k *Kernel) Options(name string) (map[string]any, bool) {
 	if k.cfg == nil || k.cfg.Options == nil {
 		return nil, false
 	}
+	k.mu.RLock()
+	defer k.mu.RUnlock()
 	v, ok := k.cfg.Options[name]
 	return v, ok
+}
+
+// SetOptions 整体替换某插件的配置节（设置面板保存时用）。
+func (k *Kernel) SetOptions(name string, opts map[string]any) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.cfg == nil {
+		k.cfg = &Config{}
+	}
+	if k.cfg.Options == nil {
+		k.cfg.Options = map[string]map[string]any{}
+	}
+	k.cfg.Options[name] = opts
+}
+
+// SetConfigPath 记录配置文件位置，供设置面板写回。
+func (k *Kernel) SetConfigPath(p string) {
+	k.mu.Lock()
+	k.cfgPath = p
+	k.mu.Unlock()
+}
+
+// ConfigPath 返回配置文件路径（可能为空：配置来自内存）。
+func (k *Kernel) ConfigPath() string {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	return k.cfgPath
 }
 
 // New 创建内核。
@@ -145,6 +177,7 @@ func New(cfg *Config) *Kernel {
 		handlers: map[string][]sub{},
 		plugins:  map[string]Plugin{},
 		cfg:      cfg,
+		cfgPath:  cfg.Path,
 	}
 }
 

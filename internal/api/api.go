@@ -89,6 +89,12 @@ type LLM interface {
 	Chat(ctx context.Context, msgs []Message, tools []ToolSpec, onDelta StreamDelta) (Message, error)
 }
 
+// Configurable 可选能力：服务支持运行时改配置（Web 设置面板用）。
+// 不是所有实现都必须热更新，但实现了就必须保证「改完下一轮立即生效」。
+type Configurable interface {
+	Configure(cfg map[string]any) error
+}
+
 // Loop agent 主循环：用户输入 → 模型 ↔ 工具 → 最终回复。
 type Loop interface {
 	Run(ctx context.Context, userText string, onDelta StreamDelta) (string, error)

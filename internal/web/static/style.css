@@ -794,6 +794,181 @@ svg { display: block; }
 .toast[data-kind="error"] { background: rgb(180, 45, 45); }
 @keyframes toastIn { from { opacity: 0; transform: translateY(6px); } }
 
+/* ---------- trajectory ---------- */
+
+.traceScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0 24px;
+}
+.trace {
+  width: min(var(--content-max), calc(100% - 48px));
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+.frame[data-view="empty"] .traceScroll { display: none; }
+
+.traceStep {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 6px;
+}
+.traceStep:hover { background: var(--hover); }
+.traceStep::before {
+  content: '';
+  position: absolute;
+  left: 15px;
+  top: 26px;
+  bottom: -4px;
+  width: 1px;
+  background: var(--border-l2);
+}
+.traceStep:last-child::before { display: none; }
+
+.traceIdx {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-layer-3);
+  color: var(--label-tertiary);
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  z-index: 1;
+}
+.traceStep[data-state="error"] .traceIdx { background: rgba(242, 90, 90, 0.18); color: var(--error); }
+.traceStep[data-state="done"] .traceIdx { color: var(--label-secondary); }
+
+.traceBody { min-width: 0; flex: 1; }
+.traceHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+}
+.traceName {
+  font-family: var(--font-code);
+  font-size: 12px;
+  color: var(--label-primary);
+}
+.traceSum {
+  font-size: 12px;
+  color: var(--label-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.traceState { font-size: 11px; color: var(--label-caption); flex: 0 0 auto; }
+.traceStep[data-state="error"] .traceState { color: var(--error); }
+
+.traceDetail { display: none; margin-top: 6px; }
+.traceBody[data-open="true"] .traceDetail { display: block; }
+.traceDetail pre {
+  margin: 4px 0;
+  padding: 8px 10px;
+  background: var(--code-bg);
+  border-radius: 6px;
+  border: 1px solid var(--border-l1);
+  font-family: var(--font-code);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--label-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.traceEmpty {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--label-caption);
+  font-size: 12.5px;
+}
+
+/* ---------- modal ---------- */
+
+.modalMask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+  animation: fadeIn 0.15s var(--ease);
+}
+@keyframes fadeIn { from { opacity: 0; } }
+
+.modal {
+  width: min(560px, calc(100vw - 48px));
+  max-height: 80vh;
+  overflow: auto;
+  background: var(--bg-layer-2);
+  border: 1px solid var(--border-l2);
+  border-radius: var(--r-lg);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  padding: 18px 20px 16px;
+}
+.modalTitle {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.modalDesc {
+  font-size: 12.5px;
+  color: var(--label-caption);
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+.field { margin-bottom: 12px; }
+.field label {
+  display: block;
+  font-size: 12px;
+  color: var(--label-tertiary);
+  margin-bottom: 5px;
+}
+.field input, .field select {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-l2);
+  border-radius: var(--r-sm);
+  color: var(--label-primary);
+  font-family: var(--font);
+  font-size: 13px;
+  outline: 0;
+}
+.field input:focus, .field select:focus { border-color: var(--border-l4); }
+.field .hint { font-size: 11px; color: var(--label-caption); margin-top: 4px; }
+
+.modalFoot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.btn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  background: var(--hover);
+  color: var(--label-secondary);
+}
+.btn:hover { background: var(--active); color: var(--label-primary); }
+.btn.primary { background: var(--label-primary); color: var(--bg-base); }
+.btn.primary:hover { background: #fff; }
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 1024px) {

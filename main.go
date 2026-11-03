@@ -92,6 +92,11 @@ func loadConfig(explicit string) (*kernel.Config, error) {
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	if abs, err := filepath.Abs(path); err == nil {
+		cfg.Path = abs
+	} else {
+		cfg.Path = path
+	}
 	return cfg, nil
 }
 

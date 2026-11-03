@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"gsh/internal/api"
@@ -29,7 +30,17 @@ func (p *Plugin) Name() string { return "llm" }
 
 // Apply 按 provider 配置注册 llm 服务。
 func (p *Plugin) Apply(ctx *kernel.Ctx) error {
-	cfg := ctx.Config()
+	inner, err := buildLLM(ctx.Config())
+	if err != nil {
+		return err
+	}
+	// 包一层可替换实现：Web 设置面板改模型后不必重启进程。
+	ctx.Provide("llm", &switchable{inner: inner})
+	return nil
+}
+
+// buildLLM 根据配置构造 provider。
+func buildLLM(cfg map[string]any) (api.LLM, error) {
 	provider := "echo"
 	if cfg != nil {
 		if v, ok := cfg["provider"].(string); ok && v != "" {
@@ -38,7 +49,7 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 	}
 	switch provider {
 	case "echo":
-		ctx.Provide("llm", &echoLLM{})
+		return &echoLLM{}, nil
 	case "openai":
 		c := &openaiLLM{httpc: &http.Client{Timeout: 10 * time.Minute}}
 		if cfg != nil {
@@ -67,10 +78,38 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 		if c.model == "" {
 			c.model = "deepseek-chat"
 		}
-		ctx.Provide("llm", c)
+		return c, nil
 	default:
-		return fmt.Errorf("llm: unknown provider %q (echo|openai)", provider)
+		return nil, fmt.Errorf("llm: unknown provider %q (echo|openai)", provider)
 	}
+}
+
+// switchable 可热替换的 LLM 代理。
+// 读路径持读锁，Configure 持写锁整体换掉实现，正在跑的请求不受影响。
+type switchable struct {
+	mu    sync.RWMutex
+	inner api.LLM
+}
+
+func (s *switchable) Chat(ctx context.Context, msgs []api.Message, tools []api.ToolSpec, onDelta api.StreamDelta) (api.Message, error) {
+	s.mu.RLock()
+	inner := s.inner
+	s.mu.RUnlock()
+	if inner == nil {
+		return api.Message{}, fmt.Errorf("llm: not configured")
+	}
+	return inner.Chat(ctx, msgs, tools, onDelta)
+}
+
+// Configure 实现 api.Configurable。
+func (s *switchable) Configure(cfg map[string]any) error {
+	inner, err := buildLLM(cfg)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.inner = inner
+	s.mu.Unlock()
 	return nil
 }
 

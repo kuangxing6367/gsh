@@ -13,3 +13,6 @@ gsh
 *.tmp
 sse.tmp.txt
 req.tmp.json
+
+# Go 构建临时文件
+*.exe~

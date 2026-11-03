@@ -31,8 +31,10 @@
   const S = {
     model: '',
     provider: '',
+    baseUrl: '',
     workspace: '',
     sessions: [],
+    messages: [],
     currentId: null,
     running: false,
     runId: null,
@@ -299,7 +301,8 @@
       frame.dataset.view = 'chat';
       const meta = S.sessions.find((s) => s.id === id);
       $('#convTitle').textContent = (meta && meta.title) || '新会话';
-      renderHistory(data.messages || []);
+      S.messages = data.messages || [];
+      renderHistory(S.messages);
       renderSidebar();
       S.turns = countTurns(data.messages || []);
       S.steps = countToolCalls(data.messages || []);
@@ -352,6 +355,9 @@
       const st = await api('/api/state');
       S.model = st.model || '';
       S.provider = st.provider || '';
+      S.baseUrl = st.base_url || '';
+      S.thinkingFormat = st.thinking_format || 'none';
+      S.apiKeySet = !!st.api_key_set;
       S.workspace = st.workspace || '';
       S.sessions = st.sessions || [];
       $('#modelName').textContent = S.model || '未配置模型';
@@ -453,6 +459,14 @@
       setRunning(false);
       S.abort = null;
       S.runId = null;
+      // 静默同步一次权威消息列表，保证轨迹视图与刷新后一致
+      try {
+        const d = await api('/api/session?id=' + encodeURIComponent(S.currentId));
+        S.messages = d.messages || [];
+        if (document.querySelector('.tab.active').dataset.tab === 'trajectory') renderTrace();
+      } catch {
+        /* 会话可能刚被删除 */
+      }
       refresh();
     }
   }
@@ -575,7 +589,7 @@
     setTimeout(() => delete frame.dataset.animating, 320);
   };
 
-  $('#modelBtn').onclick = () => toast('模型由 config.json 的 plugins_cfg.llm 配置');
+  $('#modelBtn').onclick = openSettings;
   $('#permBtn').onclick = () =>
     toast('当前权限：完全权限（allow_destructive 由配置决定）');
   $('#attachBtn').onclick = () => toast('附件上传待接入');
@@ -594,13 +608,182 @@
   };
   $('#btnRight').onclick = () => toast('右侧面板待接入');
 
-  // 页签：轨迹视图先给一个占位（后续接 tool_call 时间线）
+  // ---------- settings ----------
+
+  function openSettings() {
+    // 已有遮罩就不重复开
+    if ($('.modalMask')) return;
+
+    const mask = el('div', 'modalMask');
+    const modal = el('div', 'modal');
+
+    modal.appendChild(el('div', 'modalTitle', '模型设置'));
+    modal.appendChild(
+      el('div', 'modalDesc', '保存后立即生效并写回 config.json。API Key 不回显，留空表示保持不变。')
+    );
+
+    const providerField = el('div', 'field');
+    providerField.appendChild(el('label', null, '提供方'));
+    const sel = el('select');
+    [['openai', 'OpenAI 兼容（openai）'], ['echo', '本地回显（echo，不调用模型）']].forEach(([v, t]) => {
+      const o = el('option', null, t);
+      o.value = v;
+      sel.appendChild(o);
+    });
+    sel.value = S.provider || 'openai';
+    providerField.appendChild(sel);
+    modal.appendChild(providerField);
+
+    const baseInput = mkField(modal, '接口地址 base_url', S.baseUrl, 'https://api.deepseek.com');
+    const modelInput = mkField(modal, '模型 model', S.model, 'deepseek-chat');
+    const keyInput = mkField(modal, 'API Key', '', S.apiKeySet ? '已配置（留空不修改）' : 'sk-…', 'password');
+    const thinkInput = mkField(modal, '思考格式 thinking_format', S.thinkingFormat || 'none', 'none / deepseek');
+
+    const foot = el('div', 'modalFoot');
+    const cancel = el('button', 'btn', '取消');
+    const save = el('button', 'btn primary', '保存');
+    foot.appendChild(cancel);
+    foot.appendChild(save);
+    modal.appendChild(foot);
+
+    mask.appendChild(modal);
+    document.body.appendChild(mask);
+
+    const close = () => mask.remove();
+    cancel.onclick = close;
+    mask.onclick = (e) => {
+      if (e.target === mask) close();
+    };
+    document.addEventListener(
+      'keydown',
+      function esc(e) {
+        if (e.key === 'Escape') {
+          close();
+          document.removeEventListener('keydown', esc);
+        }
+      },
+      { once: true }
+    );
+
+    save.onclick = async () => {
+      save.disabled = true;
+      save.textContent = '保存中…';
+      try {
+        const body = {
+          provider: sel.value,
+          base_url: baseInput.value.trim(),
+          model: modelInput.value.trim(),
+          thinking_format: thinkInput.value.trim(),
+        };
+        if (keyInput.value.trim()) body.api_key = keyInput.value.trim();
+        await api('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        close();
+        toast('已保存，立即生效');
+        await refresh();
+      } catch (e) {
+        save.disabled = false;
+        save.textContent = '保存';
+        toast('保存失败：' + e.message, 'error');
+      }
+    };
+  }
+
+  function mkField(parent, label, value, placeholder, type) {
+    const f = el('div', 'field');
+    f.appendChild(el('label', null, label));
+    const i = el('input');
+    i.value = value || '';
+    if (placeholder) i.placeholder = placeholder;
+    if (type) i.type = type;
+    f.appendChild(i);
+    parent.appendChild(f);
+    return i;
+  }
+
+  // 页签：对话 / 轨迹
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.onclick = () => {
       document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
-      if (tab.dataset.tab === 'trajectory') toast('轨迹视图待接入');
+      const trace = tab.dataset.tab === 'trajectory';
+      chatScroll.hidden = trace;
+      $('#traceScroll').hidden = !trace;
+      if (trace) renderTrace();
     };
   });
+
+  // 轨迹视图：把会话里的工具调用按时间线摊开，便于回答「它到底做了什么」。
+  function renderTrace() {
+    const root = $('#trace');
+    root.innerHTML = '';
+    const steps = collectSteps(S.messages);
+
+    if (!steps.length) {
+      root.appendChild(el('div', 'traceEmpty', '这个会话还没有工具调用'));
+      return;
+    }
+
+    steps.forEach((s, i) => {
+      const row = el('div', 'traceStep');
+      row.dataset.state = s.state;
+      row.appendChild(el('span', 'traceIdx', String(i + 1)));
+
+      const body = el('div', 'traceBody');
+      body.dataset.open = 'false';
+      const head = el('div', 'traceHead');
+      head.appendChild(el('span', 'traceName', s.name));
+      head.appendChild(el('span', 'traceSum', s.summary || ''));
+      head.appendChild(el('span', 'traceState', s.state === 'error' ? '失败' : s.state === 'running' ? '进行中' : '完成'));
+      head.onclick = () => {
+        body.dataset.open = body.dataset.open === 'true' ? 'false' : 'true';
+      };
+      body.appendChild(head);
+
+      const detail = el('div', 'traceDetail');
+      if (s.args) {
+        detail.appendChild(el('pre', null, prettyArgs(s.args)));
+      }
+      if (s.result) {
+        detail.appendChild(el('pre', null, clip(s.result, 4000)));
+      }
+      body.appendChild(detail);
+
+      row.appendChild(body);
+      root.appendChild(row);
+    });
+  }
+
+  function collectSteps(messages) {
+    const steps = [];
+    const byId = new Map();
+    (messages || []).forEach((m) => {
+      if (m.role === 'assistant' && m.tool_calls) {
+        m.tool_calls.forEach((c) => {
+          const s = {
+            id: c.id || '',
+            name: c.name,
+            args: c.arguments,
+            summary: summarizeArgs(c.arguments),
+            result: '',
+            state: 'running',
+          };
+          steps.push(s);
+          if (c.id) byId.set(c.id, s);
+        });
+      } else if (m.role === 'tool') {
+        let s = (m.tool_call_id && byId.get(m.tool_call_id)) || null;
+        if (!s) s = steps.filter((x) => x.name === m.name && x.state === 'running').pop();
+        if (s) {
+          s.result = m.content || '';
+          s.state = /^(error|exit:)/i.test(s.result) ? 'error' : 'done';
+        }
+      }
+    });
+    return steps;
+  }
 
   // 代码块复制（事件委托）
   chatEl.addEventListener('click', (e) => {

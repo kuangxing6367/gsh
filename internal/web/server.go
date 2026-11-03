@@ -10,7 +10,8 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,6 +89,7 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	mux.HandleFunc("POST /api/session/delete", w.handleSessionDelete)
 	mux.HandleFunc("POST /api/chat", w.handleChat)
 	mux.HandleFunc("POST /api/stop", w.handleStop)
+	mux.HandleFunc("POST /api/settings", w.handleSettings)
 
 	srv := &http.Server{Addr: s.addr, Handler: mux}
 	return srv.ListenAndServe()
@@ -113,13 +115,15 @@ func (w *webAPI) handleState(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(rw, map[string]any{
-		"model":     w.llmString("model"),
-		"provider":  w.llmString("provider"),
-		"base_url":  w.llmString("base_url"),
-		"workspace": w.toolString("workspace"),
-		"tools":     w.toolNames(),
-		"sessions":  metas,
-		"now":       time.Now().Format(time.RFC3339),
+		"model":           w.llmString("model"),
+		"provider":        w.llmString("provider"),
+		"base_url":        w.llmString("base_url"),
+		"thinking_format": w.llmString("thinking_format"),
+		"api_key_set":     w.llmString("api_key") != "",
+		"workspace":       w.toolString("workspace"),
+		"tools":           w.toolNames(),
+		"sessions":        metas,
+		"now":             time.Now().Format(time.RFC3339),
 	})
 }
 
@@ -296,6 +300,88 @@ func (w *webAPI) handleStop(rw http.ResponseWriter, r *http.Request) {
 	}
 	cancel()
 	writeJSON(rw, map[string]any{"ok": true})
+}
+
+// ---------- settings ----------
+
+// handleSettings POST → 改模型配置：热更新服务 + 写回 config.json。
+//
+// 只接受白名单字段：让接口能改什么，必须是代码里明写的，
+// 否则前端一个拼写错误就能把整个配置节替换掉。
+func (w *webAPI) handleSettings(rw http.ResponseWriter, r *http.Request) {
+	var req map[string]any
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		httpError(rw, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		httpError(rw, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+
+	cur, _ := w.k.Options("llm")
+	next := map[string]any{}
+	for k, v := range cur {
+		next[k] = v
+	}
+	for _, key := range []string{"provider", "base_url", "model", "thinking_format", "api_key"} {
+		v, ok := req[key]
+		if !ok {
+			continue
+		}
+		s, _ := v.(string)
+		s = strings.TrimSpace(s)
+		// 空字符串表示「不改」：前端不回显 API Key，留空不能把已有 key 抹掉。
+		if s == "" {
+			continue
+		}
+		next[key] = s
+	}
+
+	llmSvc, err := kernel.Use[api.LLM](w.k, "llm")
+	if err != nil {
+		httpError(rw, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if c, ok := llmSvc.(api.Configurable); ok {
+		if err := c.Configure(next); err != nil {
+			httpError(rw, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	w.k.SetOptions("llm", next)
+
+	if err := persistPluginOptions(w.k.ConfigPath(), "llm", next); err != nil {
+		// 热更新已生效，写盘失败只警告不否定这次修改。
+		writeJSON(rw, map[string]any{"ok": true, "warning": "配置已在内存生效，但写回文件失败：" + err.Error()})
+		return
+	}
+	writeJSON(rw, map[string]any{"ok": true})
+}
+
+// persistPluginOptions 把某个插件的配置节写回 config.json（保留其它节）。
+func persistPluginOptions(path, plugin string, opts map[string]any) error {
+	if path == "" {
+		return nil
+	}
+	root := map[string]any{}
+	if raw, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(raw, &root)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	pc, ok := root["plugins_cfg"].(map[string]any)
+	if !ok {
+		pc = map[string]any{}
+		root["plugins_cfg"] = pc
+	}
+	pc[plugin] = opts
+	b, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
 // ---------- helpers ----------
