@@ -258,7 +258,7 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 - **右侧抽屉**：能力与环境——工具规格、技能列表、运行诊断（shell 候选链/解析结果/工作区/权限）
 - SSE 实时流：`tool_call → tool_result → delta(逐字) → final → done`
 - API：`POST /api/chat`（SSE）、`GET /api/state`、`GET /api/sessions`、`GET /api/session?id=`、`POST /api/session/{new,delete,rename}`、`POST /api/settings`（热更新并写回 config）、`GET/POST /api/permission`、`GET /api/workspace/browse`、`POST /api/workspace`、`POST /api/workspace/restrict`、`GET /api/tools`
-- loop 的 `RunTraced`：工具调用/结果/最终回复以事件回调外露（DSH Trajectory 思想）
+- loop 的 `RunTraced`：工具调用/结果/最终回复以事件回调外露，便于上层（TUI / Web / REPL）做轨迹回放
 
 ## 终端 UI（TUI）
 
