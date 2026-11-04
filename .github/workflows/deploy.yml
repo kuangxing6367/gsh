@@ -22,7 +22,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install --include=optional --no-audit --no-fund
+      - run: rm -f package-lock.json
+      - run: npm install --no-audit --no-fund
       - run: npm run build
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v3
