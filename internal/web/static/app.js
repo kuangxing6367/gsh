@@ -33,6 +33,7 @@
     provider: '',
     baseUrl: '',
     workspace: '',
+    workspace_restrict: true,
     sessions: [],
     messages: [],
     currentId: null,
@@ -414,6 +415,7 @@
       S.thinkingFormat = st.thinking_format || 'none';
       S.apiKeySet = !!st.api_key_set;
       S.workspace = st.workspace || '';
+      S.workspace_restrict = st.workspace_restrict !== false;
       S.permission = st.permission || 'standard';
       S.sessions = st.sessions || [];
       $('#modelName').textContent = S.model || '未配置模型';
@@ -768,6 +770,28 @@
 
     const list = el('div', 'wsBrowse');
     modal.appendChild(list);
+
+    const restrict = el('label', 'wsRestrict');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = S.workspace_restrict !== false;
+    restrict.appendChild(cb);
+    restrict.appendChild(el('span', null, '限制工具只能访问工作区内（拦绝对路径越界与符号链接）'));
+    modal.appendChild(restrict);
+    cb.onchange = async () => {
+      try {
+        await api('/api/workspace/restrict', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ restrict: cb.checked }),
+        });
+        S.workspace_restrict = cb.checked;
+        toast(cb.checked ? '路径白名单已开启' : '路径白名单已关闭');
+      } catch (e) {
+        cb.checked = !cb.checked;
+        toast('切换失败：' + e.message, 'error');
+      }
+    };
 
     const foot = el('div', 'modalFoot');
     const cancel = el('button', 'btn', '取消');

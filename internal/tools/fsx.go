@@ -44,7 +44,10 @@ func (t *ListDirTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if root == "" {
 		root = "."
 	}
-	root = t.ws.Resolve(root)
+	root, err = t.ws.Resolve(root)
+	if err != nil {
+		return "", err
+	}
 	recursive, _ := m["recursive"].(bool)
 	depth := 2
 	if v, ok := m["depth"].(float64); ok && v > 0 {
@@ -136,7 +139,10 @@ func (t *MakeDirTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	path = t.ws.Resolve(path)
+	path, err = t.ws.Resolve(path)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return "", err
 	}
@@ -174,7 +180,14 @@ func (t *MovePathTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if from == "" || to == "" {
 		return "", fmt.Errorf("from and to are required")
 	}
-	from, to = t.ws.Resolve(from), t.ws.Resolve(to)
+	from, err = t.ws.Resolve(from)
+	if err != nil {
+		return "", err
+	}
+	to, err = t.ws.Resolve(to)
+	if err != nil {
+		return "", err
+	}
 	if dir := filepath.Dir(to); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err
@@ -218,7 +231,14 @@ func (t *CopyPathTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if from == "" || to == "" {
 		return "", fmt.Errorf("from and to are required")
 	}
-	from, to = t.ws.Resolve(from), t.ws.Resolve(to)
+	from, err = t.ws.Resolve(from)
+	if err != nil {
+		return "", err
+	}
+	to, err = t.ws.Resolve(to)
+	if err != nil {
+		return "", err
+	}
 	overwrite := true
 	if v, ok := m["overwrite"].(bool); ok {
 		overwrite = v
@@ -323,7 +343,10 @@ func (t *DeletePathTool) Run(_ context.Context, argsJSON string) (string, error)
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	path = t.ws.Resolve(path)
+	path, err = t.ws.Resolve(path)
+	if err != nil {
+		return "", err
+	}
 	if reason := unsafeDeleteTarget(path); reason != "" {
 		return "", fmt.Errorf("拒绝删除：%s", reason)
 	}

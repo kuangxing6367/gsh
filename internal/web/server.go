@@ -105,6 +105,7 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	mux.HandleFunc("POST /api/permission", w.handlePermissionSet)
 	mux.HandleFunc("GET /api/workspace/browse", w.handleBrowse)
 	mux.HandleFunc("POST /api/workspace", w.handleSetWorkspace)
+	mux.HandleFunc("POST /api/workspace/restrict", w.handleRestrictWorkspace)
 	mux.HandleFunc("GET /api/audit", w.handleAudit)
 
 	srv := &http.Server{Addr: s.addr, Handler: mux}
@@ -133,18 +134,19 @@ func (w *webAPI) handleState(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(rw, map[string]any{
-		"model":            w.llmString("model"),
-		"provider":         w.llmString("provider"),
-		"base_url":         w.llmString("base_url"),
-		"thinking_format":  w.llmString("thinking_format"),
-		"api_key_set":      w.llmString("api_key") != "",
-		"workspace":        w.wsRoot(),
-		"permission":       w.permName(),
-		"permission_label": w.permLabel(),
-		"tools":            w.toolNames(),
-		"sessions":         metas,
-		"audit_enabled":    w.audit != nil && w.audit.Enabled(),
-		"now":              time.Now().Format(time.RFC3339),
+		"model":              w.llmString("model"),
+		"provider":           w.llmString("provider"),
+		"base_url":           w.llmString("base_url"),
+		"thinking_format":    w.llmString("thinking_format"),
+		"api_key_set":        w.llmString("api_key") != "",
+		"workspace":          w.wsRoot(),
+		"workspace_restrict": w.wsRestricted(),
+		"permission":         w.permName(),
+		"permission_label":   w.permLabel(),
+		"tools":              w.toolNames(),
+		"sessions":           metas,
+		"audit_enabled":      w.audit != nil && w.audit.Enabled(),
+		"now":                time.Now().Format(time.RFC3339),
 	})
 }
 
@@ -389,6 +391,45 @@ func (w *webAPI) wsRoot() string {
 		return ws.Root()
 	}
 	return "."
+}
+
+func (w *webAPI) wsRestricted() bool {
+	if ws, err := kernel.Use[*tools.Workspace](w.k, "workspace"); err == nil {
+		return ws.Restricted()
+	}
+	return true
+}
+
+// handleRestrictWorkspace POST {restrict: bool} → 运行期切换路径白名单并写回配置。
+// 只影响文件类工具；bash 命令自身不受此边界约束。
+func (w *webAPI) handleRestrictWorkspace(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Restrict *bool `json:"restrict"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil {
+		httpError(rw, http.StatusBadRequest, "read body: "+err.Error())
+		return
+	}
+	if err := json.Unmarshal(body, &req); err != nil || req.Restrict == nil {
+		httpError(rw, http.StatusBadRequest, "restrict (bool) is required")
+		return
+	}
+	ws, err := kernel.Use[*tools.Workspace](w.k, "workspace")
+	if err != nil {
+		httpError(rw, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ws.SetRestricted(*req.Restrict)
+	toolsCfg, _ := w.k.Options("tools")
+	next := map[string]any{}
+	for k, v := range toolsCfg {
+		next[k] = v
+	}
+	next["workspace_restrict"] = *req.Restrict
+	w.k.SetOptions("tools", next)
+	_ = persistPluginOptions(w.k.ConfigPath(), "tools", next)
+	writeJSON(rw, map[string]any{"ok": true, "workspace_restrict": ws.Restricted()})
 }
 
 // handleSessionRename POST {id, title} → 改会话标题（空 title 清除自定义名）。

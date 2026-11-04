@@ -4,6 +4,7 @@
     "tools": {
       "permission": "standard",
       "workspace": ".",
+      "workspace_restrict": true,
       "shell": "auto",
       "skills": {
         "dir": "./skills"

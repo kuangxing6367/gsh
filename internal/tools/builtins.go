@@ -20,10 +20,6 @@ import (
 // maxToolOutput 工具输出上限（超长截断，避免撑爆模型上下文）。
 const maxToolOutput = 60_000
 
-func osGetwd() (string, error) { return os.Getwd() }
-
-var _ = osGetwd // 预留：工具工作目录白名单化时使用
-
 // pickShell 按候选链解析出可用的 shell（每个 BashTool 实例只解析一次）。
 // 一次解析会逐个跑探针，结果连同失败原因一起缓存下来供诊断使用。
 func (t *BashTool) pickShell(ctx context.Context) (ShellSpec, []ShellCandidate, error) {
@@ -390,7 +386,10 @@ func (t *ReadFileTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	path = t.ws.Resolve(path)
+	path, err = t.ws.Resolve(path)
+	if err != nil {
+		return "", err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -460,7 +459,10 @@ func (t *WriteFileTool) Run(_ context.Context, argsJSON string) (string, error) 
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	path = t.ws.Resolve(path)
+	path, err = t.ws.Resolve(path)
+	if err != nil {
+		return "", err
+	}
 	content, _ := m["content"].(string)
 	if dir := filepath.Dir(path); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -512,7 +514,10 @@ func (t *EditFileTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if path == "" || oldS == "" {
 		return "", fmt.Errorf("path and old_string are required")
 	}
-	path = t.ws.Resolve(path)
+	path, err = t.ws.Resolve(path)
+	if err != nil {
+		return "", err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -576,7 +581,11 @@ func (t *GlobTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if pattern == "" {
 		return "", fmt.Errorf("pattern is required")
 	}
-	matches, err := filepath.Glob(t.ws.Resolve(pattern))
+	resolved, err := t.ws.Resolve(pattern)
+	if err != nil {
+		return "", err
+	}
+	matches, err := filepath.Glob(resolved)
 	if err != nil {
 		return "", err
 	}
@@ -625,7 +634,10 @@ func (t *GrepTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if dir == "" {
 		dir = "."
 	}
-	dir = t.ws.Resolve(dir)
+	dir, err = t.ws.Resolve(dir)
+	if err != nil {
+		return "", err
+	}
 	ext := argStr(m, "glob_ext")
 
 	var b strings.Builder

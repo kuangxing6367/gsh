@@ -168,7 +168,17 @@ bash 工具默认 **安全优先**，这是 DSH 的真实教训——它一条�
 
 - `plugins_cfg.tools.workspace` 指定初始目录；Web 侧可浏览并切换（`/api/workspace`）。
 - `bash` 的 `cmd.Dir` 与 `read_file`/`write_file`/`glob`/`grep`/`list_dir`/`move`/`copy`/`delete` 的路径解析**同源**。
-- 相对路径以工作区为基准，绝对路径原样放行（显式行为，不是默认）。
+- 相对路径以工作区为基准；**绝对路径不再无条件放行**。
+
+## 路径白名单（workspace 硬边界）
+
+默认开启。`plugins_cfg.tools.workspace_restrict: false` 可关闭（退回旧行为：允许绝对路径出界）。
+
+- 校验点统一在 `Workspace.Resolve`：所有文件类工具都走它，返回 `(path, error)`，越界直接拒绝，不会静默落盘。
+- 拦三类逃逸：绝对路径出界、`..` 越界、工作区内符号链接指向外部。判定用 `filepath.Rel`（不是字符串前缀），避免 `app` / `application` 这类兄弟目录被误判为包含。
+- 目标文件不存在时逐级上溯到最近的已存在祖先再做 `EvalSymlinks`；含通配符的 glob pattern 也能正确判定。
+- 运行期可切换：`POST /api/workspace/restrict {"restrict": bool}`，热生效并写回 config；Web 的「选择工作区」弹窗里有开关。
+- **边界（别误当沙箱）**：这层只约束文件工具的路径参数。`bash` 命令本身能 `cd` 出工作区或写绝对路径；HTTP 工具、`skills` 目录加载也不走 `Resolve`。要真正隔离须靠容器 / 系统权限，不是这层字符串校验。
 
 ## 远程节点执行（bash 分发到你的节点）
 
@@ -241,7 +251,7 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 - **输入区**：附件上传（文本 ≤256KB，内容进上下文，回显抽成卡片）、权限三档切换、模型设置、发送/停止（`Esc` 中断）、底部统计
 - **右侧抽屉**：能力与环境——工具规格、技能列表、运行诊断（shell 候选链/解析结果/工作区/权限）
 - SSE 实时流：`tool_call → tool_result → delta(逐字) → final → done`
-- API：`POST /api/chat`（SSE）、`GET /api/state`、`GET /api/sessions`、`GET /api/session?id=`、`POST /api/session/{new,delete,rename}`、`POST /api/settings`（热更新并写回 config）、`GET/POST /api/permission`、`GET /api/workspace/browse`、`POST /api/workspace`、`GET /api/tools`
+- API：`POST /api/chat`（SSE）、`GET /api/state`、`GET /api/sessions`、`GET /api/session?id=`、`POST /api/session/{new,delete,rename}`、`POST /api/settings`（热更新并写回 config）、`GET/POST /api/permission`、`GET /api/workspace/browse`、`POST /api/workspace`、`POST /api/workspace/restrict`、`GET /api/tools`
 - loop 的 `RunTraced`：工具调用/结果/最终回复以事件回调外露（DSH Trajectory 思想）
 
 ## 终端 UI（TUI）
@@ -292,7 +302,7 @@ gsh 作为未来嵌进沙箱 / 运维体系的 harness，操作可追溯是刚�
 - [x] 终端 TUI（bubbletea，opencode 风格 1:1，复用 loop 流式事件）
 - [x] TUI markdown 渲染（标题/列表/引用/代码块/行内码/链接，按终端单元格宽度折行）
 - [x] 操作审计日志（落盘 + 脱敏 + 查询 API + Web 展示面板）
-- [ ] 工具的 workspace 白名单（限制只能操作某个根目录）
+- [x] 工具的 workspace 白名单（Resolve 硬边界：绝对路径 / `..` / 符号链接越界，运行期开关）
 
 ## License
 

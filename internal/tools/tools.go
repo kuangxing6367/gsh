@@ -75,6 +75,10 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 				fmt.Fprintf(os.Stderr, "[tools] 警告：workspace %q 不可用（%v），改用 %s\n", v, err, ws.Root())
 			}
 		}
+		// 白名单默认开启（NewWorkspace）；只有显式配 false 才放行出界路径。
+		if v, ok := cfg["workspace_restrict"].(bool); ok {
+			ws.SetRestricted(v)
+		}
 	}
 	// 工作区是跨插件共享的运行时状态：Web UI 切目录后，
 	// shell 的 cwd 与所有文件工具的路径解析必须同时切换。

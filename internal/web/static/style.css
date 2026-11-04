@@ -999,6 +999,23 @@ svg { display: block; }
 }
 .wsRow:hover { background: var(--hover); color: var(--label-primary); }
 .wsRow svg { color: var(--label-caption); flex: 0 0 auto; }
+.wsRestrict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--label-secondary);
+  line-height: 1.5;
+  cursor: pointer;
+}
+.wsRestrict input {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent, #5898f0);
+  cursor: pointer;
+}
 .wsLoading {
   padding: 10px;
   font-size: 12px;
