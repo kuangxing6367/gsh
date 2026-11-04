@@ -32,8 +32,13 @@ cp config.example.json config.json   # 填 api_key
 ./gsh.exe -e "数一下 internal 下有几个 Go 文件"   # headless
 ./gsh.exe                                          # REPL
 ./gsh.exe -web                                      # Web UI → http://localhost:8934
-./gsh.exe -tui                                      # opencode 风格终端 UI（bubbletea）
+./gsh.exe -tui                                      # 终端 UI（bubbletea）
 ./gsh.exe -tools                                    # 看当前用哪个 shell、启用了哪些工具、装了哪些技能
+# 会话管理
+./gsh.exe -ls                                       # 列出全部会话（id / 时间 / 条数 / 标题）
+./gsh.exe -s <id>                                   # 恢复某会话并进入终端 UI（回放历史 + 继续提问）
+./gsh.exe --fork <id>                               # 以某会话为蓝本派生新会话后进入
+./gsh.exe -replay <id>                              # 非交互回放某会话的事件流（Trajectory 视图）
 ```
 
 `config.json` 含 API key，已在 `.gitignore` 中排除。
@@ -94,7 +99,7 @@ internal/
   loop/     agent 主循环：模型 ↔ 工具，最大 24 轮保护，RunTraced 事件流
   ui/       REPL + headless(-e)
   web/      Web UI 插件（embed 前端 + SSE + 会话 API）
-  tui/      TUI 插件（bubbletea）：opencode 风格终端界面，复用 loop 的流式事件
+  tui/      TUI 插件（bubbletea）：终端界面，复用 loop 的流式事件
 ```
 
 插件装载序固定：`session → tools → llm → loop → web → ui`。
@@ -141,7 +146,7 @@ skills/
 
 已内置示例 `skills/remote-ops/SKILL.md`：远程节点只读巡检（含判断口径：负载要对核数、分区 >85% 才处理、内存看 available）。
 
-## 安全策略（对齐 DSH 删盘事故）
+## 安全策略（删盘事故驱动）
 
 bash 工具默认 **安全优先**，这是 DSH 的真实教训——它一条命令清空了用户 D 盘：
 
@@ -256,7 +261,7 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 
 ## 终端 UI（TUI）
 
-`./gsh.exe -tui` 启动 opencode 风格终端界面（bubbletea 实现；布局与配色按 opencode dev 分支实际截图对齐，不是凭印象的「暗色 + 绿色」）。
+`./gsh.exe -tui` 启动终端界面（bubbletea 实现；布局与配色按实际截图落地，不是凭印象的「暗色 + 绿色」）。
 
 - 配色（截图采样）：画布 `#0a0a0a`、元素 `#141414`、输入框 `#1e1e1e`、正文 `#e8e8e8`、次级 `#909090`、边框 `#3a3a3a`、强调蓝 `#5898f0`
 - **顶部**：圆角标题条，`# 会话标题` 左；右栏空闲时显示 `N 条 · sessionxxxx`，运行中显示 `运行中 mm:ss · sessionxxxx`，跑完显示 `mm:ss · N 条 · sessionxxxx`（不编 token/cost，避免假数字）
@@ -290,11 +295,11 @@ gsh 作为未来嵌进沙箱 / 运维体系的 harness，操作可追溯是刚�
 ## Roadmap
 
 - [x] Web UI 插件（对应 DSH web 模式）
-- [x] 危险命令拦截（安全优先，对齐 DSH 删盘事故）
+- [x] 危险命令拦截（安全优先，删盘事故驱动）
 - [x] provider 显式方言（杜绝 hostname 猜测导致 token 翻三倍）
 - [x] 内核抽成可 import 的 `harness` 包（gsh 即组件，可嵌入）
-- [ ] session resume / fork 的 CLI 入口（`-s <id>` / `--fork`）
-- [ ] 事件流按会话回放（Trajectory 视图增强）
+- [x] session resume / fork 的 CLI 入口（`-s <id>` / `--fork` / `-ls` / `-replay`）
+- [x] 事件流按会话回放（Trajectory 视图，非交互复盘）
 - [x] remote/sandbox 工具插件：bash 支持 `node` 参数，经 SSH 分发到 139/82/160 等节点
 - [x] remote 支持外部命令后端（`exec`/`args`）：已有远程 shell 工具（如 rzsh）直接接成执行后端
 - [x] shell 选择配置化（候选链 / 严格显式 / 失败报错 / 非 POSIX 方言提示 + GBK 转码）
@@ -302,7 +307,7 @@ gsh 作为未来嵌进沙箱 / 运维体系的 harness，操作可追溯是刚�
 - [x] 权限三档（read_only/standard/full），运行期切换，registry 统一拦截
 - [x] 统一工作区：shell cwd 与文件工具路径解析同源
 - [x] Web UI 1:1（会话树/轨迹/附件/权限/设置/能力面板/重命名/搜索/筛选）
-- [x] 终端 TUI（bubbletea，opencode 风格 1:1，复用 loop 流式事件）
+- [x] 终端 TUI（bubbletea，复用 loop 流式事件）
 - [x] TUI markdown 渲染（标题/列表/引用/代码块/行内码/链接，按终端单元格宽度折行）
 - [x] TUI 写类工具内嵌统一 diff（着色渲染）
 - [x] TUI 斜杠命令 + 帮助浮层（`/help` `/sessions` `/new` `/clear`）

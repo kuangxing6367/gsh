@@ -1,6 +1,6 @@
 // Package tui 是 gsh 的终端 UI（TUI）前端，用 bubbletea + lipgloss 实现。
 //
-// 视觉对齐 opencode 的真实 TUI（取其 dev 分支落地页截图为参照）：
+// 终端 UI 视觉规范（布局与配色按实际截图落地，不凭印象）：
 //   - 顶部：圆角「# 会话标题」条，右对齐 session 信息
 //   - 用户消息：左侧蓝色竖条 + 浅色底块（不是行内气泡）
 //   - 工具行：`* Tool args` / `→ Read path` 的等宽行，无 ✓/✗ 图标
@@ -114,6 +114,7 @@ type Model struct {
 	// 交互式权限确认：标准档位下高风险工具执行前先问用户。
 	permCh chan *permRequest // 审批器 → Model
 	perm   *permRequest      // 当前待确认请求（nil=无）
+	pendingResume string    // 非空时，首帧尺寸就绪后定位并回放该会话
 }
 
 // permRequest 一次待确认的工具调用（审批器 → Model 的跨 goroutine 消息）。
@@ -168,6 +169,38 @@ func Run(k *kernel.Kernel) error {
 	if err != nil {
 		return err
 	}
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err = p.Run()
+	return err
+}
+
+// RunWithSession 启动 TUI 并定位到指定会话（resume / fork 后继续对话）。
+// 首帧尺寸就绪后在后台回放该会话的历史消息，进入即可看到上下文并继续提问。
+func RunWithSession(k *kernel.Kernel, sessionID string) error {
+	store, err := kernel.Use[api.SessionStore](k, "sessionStore")
+	if err != nil {
+		return err
+	}
+	if _, err := store.Open(sessionID); err != nil {
+		return err
+	}
+	lp, err := kernel.Use[api.Loop](k, "loop")
+	if err != nil {
+		return err
+	}
+	m, err := NewModel(k, sessionID, lp)
+	if err != nil {
+		return err
+	}
+	if list, e := store.ListMeta(); e == nil {
+		for _, s := range list {
+			if s.ID == sessionID {
+				m.title = s.Title
+				break
+			}
+		}
+	}
+	m.pendingResume = sessionID
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	return err
@@ -239,6 +272,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ta.SetWidth(maxInt(msg.Width-5, 10))
 		m.ready = true
 		m.renderContent()
+		if m.pendingResume != "" {
+			m.switchSession(m.pendingResume, m.title)
+			m.pendingResume = ""
+		}
 
 	case tea.KeyMsg:
 		switch {
@@ -417,7 +454,7 @@ func (m *Model) renderContent() {
 	m.vp.GotoBottom()
 }
 
-// renderUserBlock 用户消息：左侧蓝色竖条 + 浅色底块（对齐 opencode）。
+// renderUserBlock 用户消息：左侧蓝色竖条 + 浅色底块。
 func (m *Model) renderUserBlock(text string, w int) string {
 	return lipgloss.NewStyle().
 		Border(lipgloss.Border{Left: "┃"}, false, false, false, true).

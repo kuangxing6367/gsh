@@ -36,7 +36,7 @@ func newTestModel(t *testing.T, w, h int) *Model {
 	return m
 }
 
-// TestTUIView 验证 opencode 风格的关键视觉元素都正确渲染且不崩溃。
+// TestTUIView 验证终端 UI 的关键视觉元素都正确渲染且不崩溃。
 func TestTUIView(t *testing.T) {
 	m := newTestModel(t, 100, 32)
 

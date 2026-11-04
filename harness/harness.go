@@ -94,7 +94,7 @@ func (h *Harness) RunREPL(ctx context.Context) error {
 	})
 }
 
-// RunTUI 启动 opencode 风格的终端 UI（阻塞）。复用内核的 loop / session 服务。
+// RunTUI 启动终端 UI（阻塞）。复用内核的 loop / session 服务。
 func (h *Harness) RunTUI() error {
 	return tui.Run(h.k)
 }
@@ -107,6 +107,68 @@ func (h *Harness) RunHeadless(ctx context.Context, prompt string) error {
 	}
 	return ui.RunHeadless(ctx, prompt, func(ctx context.Context, in string, d api.StreamDelta) (string, error) {
 		return lp.RunTraced(ctx, in, d, ui.PrintTrace)
+	})
+}
+
+// ListSessions 列出所有会话（id / 标题 / 时间 / 消息数），供 CLI 概览。
+func (h *Harness) ListSessions() ([]api.SessionMeta, error) {
+	store, err := Use[api.SessionStore](h, "sessionStore")
+	if err != nil {
+		return nil, err
+	}
+	return store.ListMeta()
+}
+
+// ForkSession 以指定会话为蓝本派生新会话，返回新会话 id。
+func (h *Harness) ForkSession(id string) (string, error) {
+	store, err := Use[api.SessionStore](h, "sessionStore")
+	if err != nil {
+		return "", err
+	}
+	neu, err := store.Fork(id)
+	if err != nil {
+		return "", err
+	}
+	return neu.ID(), nil
+}
+
+// ReplaySession 把指定会话的事件流渲染为可读轨迹文本（Trajectory 视图）。
+func (h *Harness) ReplaySession(id string) (string, error) {
+	store, err := Use[api.SessionStore](h, "sessionStore")
+	if err != nil {
+		return "", err
+	}
+	sess, err := store.Open(id)
+	if err != nil {
+		return "", err
+	}
+	return ui.RenderTrajectory(sess), nil
+}
+
+// RunTUIWithSession 启动终端 UI 并定位到指定会话（resume / fork 后继续对话）。
+func (h *Harness) RunTUIWithSession(sessionID string) error {
+	return tui.RunWithSession(h.k, sessionID)
+}
+
+// RunREPLWithSession 在指定会话上启动交互 REPL。
+func (h *Harness) RunREPLWithSession(ctx context.Context, sessionID string) error {
+	lp, err := Use[api.Loop](h, "loop")
+	if err != nil {
+		return err
+	}
+	return ui.RunREPL(ctx, func(ctx context.Context, in string, d api.StreamDelta) (string, error) {
+		return lp.RunSession(ctx, sessionID, in, d, ui.PrintTrace)
+	})
+}
+
+// RunHeadlessWithSession 在指定会话上一次性执行。
+func (h *Harness) RunHeadlessWithSession(ctx context.Context, prompt, sessionID string) error {
+	lp, err := Use[api.Loop](h, "loop")
+	if err != nil {
+		return err
+	}
+	return ui.RunHeadless(ctx, prompt, func(ctx context.Context, in string, d api.StreamDelta) (string, error) {
+		return lp.RunSession(ctx, sessionID, in, d, ui.PrintTrace)
 	})
 }
 

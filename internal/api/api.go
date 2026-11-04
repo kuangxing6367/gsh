@@ -1,5 +1,5 @@
 // Package api 定义跨插件共享的消息与服务接口。
-// 各插件只依赖本包 + kernel，互不直接 import（对齐 DSH 的 typed service 思路）。
+// 各插件只依赖本包 + kernel，互不直接 import（typed service 思路，按类型取用）。
 package api
 
 import (
@@ -115,7 +115,7 @@ const (
 	EventFinal      EventKind = "final"
 )
 
-// Event 一次运行的事件记录（对齐 DSH 的 append-only trajectory 可观测性）。
+// Event 一次运行的事件记录（append-only trajectory 可观测性）。
 type Event struct {
 	Kind EventKind `json:"kind"`
 	ID   string    `json:"id,omitempty"`   // 工具调用 ID（tool_call 与 tool_result 配对用）

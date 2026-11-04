@@ -1,6 +1,6 @@
 // gsh — "Go shell harness"：DSH（DeepSeek Harness）思想的 Go 重写。
 // 一切皆插件：kernel 装载 session / tools / llm / loop / ui，
-// config.json 声明启用哪些插件与各自配置（对齐 DSH 的 bundle/profile）。
+// config.json 声明启用哪些插件与各自配置（bundle / profile 形式）。
 package main
 
 import (
@@ -28,6 +28,10 @@ func main() {
 		showVer  = flag.Bool("v", false, "print version and loaded plugins")
 		verbose  = flag.Bool("verbose", false, "print loaded plugins")
 		listTool = flag.Bool("tools", false, "print resolved shell / enabled tools / skills then exit")
+		listSessions = flag.Bool("ls", false, "list sessions and exit")
+		sessionID    = flag.String("s", "", "resume session id (enter TUI to continue)")
+		forkID       = flag.String("fork", "", "fork session id then resume")
+		replayID     = flag.String("replay", "", "replay session trajectory and exit")
 	)
 	flag.Parse()
 	if *showVer && *headless == "" {
@@ -60,22 +64,36 @@ func main() {
 	}
 
 	ctx := context.Background()
+	wantSession := *sessionID != "" || *forkID != ""
 	switch {
-	case *tuiMode:
-		if err := h.RunTUI(); err != nil {
+	case *listSessions:
+		listSessionsOut(h)
+	case *replayID != "":
+		out, err := h.ReplaySession(*replayID)
+		if err != nil {
 			fatal(err)
 		}
+		fmt.Println(out)
 	case *webMode:
 		fmt.Printf("gsh web UI → http://localhost%s\n", *webAddr)
 		if err := h.Serve(*webAddr); err != nil {
 			fatal(err)
 		}
+	case *tuiMode:
+		runTUI(h, wantSession, *sessionID, *forkID)
 	case *headless != "":
-		if err := h.RunHeadless(ctx, *headless); err != nil {
+		id := resolveSessionID(h, *sessionID, *forkID)
+		if err := h.RunHeadlessWithSession(ctx, *headless, id); err != nil {
 			fatal(err)
 		}
 	default:
-		if err := h.RunREPL(ctx); err != nil {
+		if wantSession {
+			// 只给了 -s / --fork（没显式 -tui）：进 TUI 回放历史并继续。
+			id := resolveSessionID(h, *sessionID, *forkID)
+			if err := h.RunTUIWithSession(id); err != nil {
+				fatal(err)
+			}
+		} else if err := h.RunREPL(ctx); err != nil {
 			fatal(err)
 		}
 	}
@@ -119,4 +137,46 @@ func stringsJoin(ss []string, sep string) string {
 		out += s
 	}
 	return out
+}
+
+// listSessionsOut 打印会话列表（id / 时间 / 条数 / 标题）。
+func listSessionsOut(h *harness.Harness) {
+	list, err := h.ListSessions()
+	if err != nil {
+		fatal(err)
+	}
+	if len(list) == 0 {
+		fmt.Println("（暂无会话）")
+		return
+	}
+	for _, s := range list {
+		fmt.Printf("%s  %s  %d 条  %s\n", s.ID, s.Updated.Format("2006-01-02 15:04"), s.Messages, s.Title)
+	}
+}
+
+// runTUI 启动终端 UI；有会话修饰时定位到指定会话。
+func runTUI(h *harness.Harness, wantSession bool, sessionID, forkID string) {
+	if wantSession {
+		id := resolveSessionID(h, sessionID, forkID)
+		if err := h.RunTUIWithSession(id); err != nil {
+			fatal(err)
+		}
+	} else {
+		if err := h.RunTUI(); err != nil {
+			fatal(err)
+		}
+	}
+}
+
+// resolveSessionID 处理 -s / --fork：fork 优先，派生新会话后返回其 id。
+func resolveSessionID(h *harness.Harness, sessionID, forkID string) string {
+	if forkID != "" {
+		id, err := h.ForkSession(forkID)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Printf("forked → %s\n", id)
+		return id
+	}
+	return sessionID
 }

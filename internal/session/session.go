@@ -1,5 +1,5 @@
 // Package sessionplugin 提供会话存储插件：
-// JSONL append-only 落盘，支持 resume / fork（对齐 DSH 的 append-only session log）。
+// JSONL append-only 落盘，支持 resume / fork。
 package session
 
 import (

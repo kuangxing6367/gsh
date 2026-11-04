@@ -1,5 +1,5 @@
 // Package toolsplugin 工具注册表 + 内建工具。
-// 工具也是插件注册进来的能力（对齐 DSH 的 tool catalog / executor）。
+// 工具也是插件注册进来的能力（统一 catalog / executor）。
 package tools
 
 import (
