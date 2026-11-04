@@ -2,7 +2,7 @@ name: Deploy docs to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - 'docs-site/**'
       - '.github/workflows/deploy.yml'
@@ -28,6 +28,6 @@ jobs:
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs-site/dist
+          publish_dir: ./docs-site/.vitepress/dist
           publish_branch: gh-pages
           cname: gsh.zgric.top
