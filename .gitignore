@@ -16,3 +16,7 @@ req.tmp.json
 
 # Go 构建临时文件
 *.exe~
+
+# 文档站（Vite）依赖与构建产物
+docs-site/node_modules/
+docs-site/dist/

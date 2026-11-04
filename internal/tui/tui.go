@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -29,6 +31,7 @@ import (
 	"gsh/internal/api"
 	"gsh/internal/kernel"
 	"gsh/internal/tools"
+	"gsh/internal/ui"
 )
 
 // opencode 视觉 token（取自 dev 分支截图采样）。
@@ -101,7 +104,8 @@ type Model struct {
 	running  bool
 	cancel   context.CancelFunc
 	streamCh chan streamEvent
-	errStr   string
+	errStr     string
+	exportPath string // 最近一次 /export 导出的 Markdown 路径（非空时在标题条下提示）
 
 	// 浮层与命令
 	overlay   string // ""=无, "help", "sessions"
@@ -325,6 +329,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.running {
 				m.openSessions()
 			}
+			return m, nil
+		case msg.Type == tea.KeyCtrlE:
+			m.exportSession()
 			return m, nil
 		case m.readOnly:
 			// 只读浏览：除 ctrl+c / 浮层 / Ctrl+P 外，忽略一切输入（含发送与编辑）。
@@ -612,7 +619,12 @@ func (m *Model) View() string {
 	if m.perm != nil {
 		footer = m.renderPermFooter(w)
 	}
-	return m.renderTitleBar(w) + "\n" + m.vp.View() + "\n" + footer
+	body := m.vp.View()
+	if m.exportPath != "" {
+		body = lipgloss.NewStyle().Foreground(lipgloss.Color("#3fb950")).
+			Render("  ✓ 已导出 Markdown："+m.exportPath) + "\n\n" + body
+	}
+	return m.renderTitleBar(w) + "\n" + body + "\n" + footer
 }
 
 // renderTitleBar 顶部圆角标题条：`# 标题` + 右对齐 耗时 · 条数 · session。
@@ -755,6 +767,8 @@ func (m *Model) runCommand(text string) {
 		} else {
 			m.ta.Focus()
 		}
+	case "/export", "/e":
+		m.exportSession()
 	case "/new":
 		if m.readOnly {
 			m.errStr = "只读模式：先 /readonly 切回可编辑再 /new"
@@ -770,6 +784,34 @@ func (m *Model) runCommand(text string) {
 	default:
 		m.errStr = "未知命令：" + cmd + "（输入 /help 查看可用命令）"
 	}
+}
+
+// exportSession 把当前会话导出为 Markdown 文件（/export 或 Ctrl+E）。
+// 落盘到当前工作目录，文件名含会话 ID，便于归档与分享。
+func (m *Model) exportSession() {
+	m.errStr = ""
+	m.exportPath = ""
+	store, err := kernel.Use[api.SessionStore](m.k, "sessionStore")
+	if err != nil {
+		m.errStr = err.Error()
+		return
+	}
+	sess, err := store.Open(m.sessID)
+	if err != nil {
+		m.errStr = err.Error()
+		return
+	}
+	md := ui.SessionToMarkdown(sess.Messages(), m.title, m.sessID)
+	wd, err := os.Getwd()
+	if err != nil {
+		wd = "."
+	}
+	path := filepath.Join(wd, "gsh-session-"+m.sessID+".md")
+	if err := os.WriteFile(path, []byte(md), 0o644); err != nil {
+		m.errStr = "写文件失败：" + err.Error()
+		return
+	}
+	m.exportPath = path
 }
 
 // newSession 开一个新会话并清屏（/new 与 /clear 都走这里）。

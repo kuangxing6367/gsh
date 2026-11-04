@@ -1291,6 +1291,9 @@ svg { display: block; }
 .frame[data-view="audit"] #auditScroll { display: block; }
 .frame[data-view="audit"] #auditRefresh { display: inline-flex; }
 
+/* 只读分享模式：隐藏输入区，仅展示会话内容（对话 / 轨迹） */
+.frame.shareMode .composerWrap { display: none; }
+
 #auditRefresh { display: none; }
 #auditScroll { display: none; flex: 1; min-height: 0; overflow-y: auto; }
 

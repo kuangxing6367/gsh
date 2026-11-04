@@ -33,6 +33,8 @@ func main() {
 		forkID       = flag.String("fork", "", "fork session id then resume")
 		replayID     = flag.String("replay", "", "replay session trajectory and exit")
 		viewID       = flag.String("view", "", "open session id in read-only browse mode (TUI)")
+		webShare     = flag.Bool("w", false, "with -replay: print web share link instead of plain text")
+		webHost      = flag.String("web-host", "gsh.zgric.top", "base host for -replay -w share link (override if gsh web UI is hosted elsewhere)")
 	)
 	flag.Parse()
 	if *showVer && *headless == "" {
@@ -70,6 +72,12 @@ func main() {
 	case *listSessions:
 		listSessionsOut(h)
 	case *replayID != "":
+		if *webShare {
+			// 分享链接指向 gsh Web UI 的只读轨迹视图（#/share/<id>）。
+			// 域名默认 gsh.zgric.top；若 Web UI 部署在其他域名，用 -web-host 覆盖。
+			fmt.Printf("分享链接：https://%s/#/share/%s\n", *webHost, *replayID)
+			return
+		}
 		out, err := h.ReplaySession(*replayID)
 		if err != nil {
 			fatal(err)

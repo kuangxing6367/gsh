@@ -369,6 +369,31 @@
     }
   }
 
+  // 只读分享：从 URL #/share/<id> 进入，加载会话并自动切到轨迹页，隐藏输入区。
+  async function loadShare(id) {
+    try {
+      const data = await api('/api/session?id=' + encodeURIComponent(id));
+      S.currentId = id;
+      const meta = S.sessions.find((s) => s.id === id);
+      $('#convTitle').textContent = (meta && meta.title) || '新会话 · 只读分享';
+      S.messages = data.messages || [];
+      renderHistory(S.messages);
+      renderSidebar();
+      S.turns = countTurns(S.messages);
+      S.steps = countToolCalls(S.messages);
+      updateStats();
+      frame.dataset.view = 'chat';
+      const tTab = $('#tabTrajectory');
+      if (tTab) tTab.click();
+      frame.classList.add('shareMode');
+      input.blur();
+      document.title = 'gsh 轨迹分享 · ' + ((meta && meta.title) || id);
+      toast('只读分享模式：可滚动查看，不能发送');
+    } catch (e) {
+      toast('打开会话失败：' + e.message, 'error');
+    }
+  }
+
   function countTurns(msgs) {
     return msgs.filter((m) => m.role === 'user').length;
   }
@@ -1489,12 +1514,29 @@
 
   // ---------- boot ----------
 
+  // 从 URL hash 解析只读分享链接 #/share/<id>。命中返回 true。
+  function routeFromHash() {
+    const m = location.hash.match(/^#\/share\/(.+)$/);
+    if (m) {
+      loadShare(decodeURIComponent(m[1]));
+      return true;
+    }
+    return false;
+  }
+
+  window.addEventListener('hashchange', () => {
+    if (routeFromHash()) return;
+    frame.classList.remove('shareMode');
+  });
+
   (async function boot() {
     await refresh();
     autoGrow();
-    if (S.sessions.length) {
+    if (routeFromHash()) {
+      // 分享模式：不自动聚焦输入框
+    } else if (S.sessions.length) {
       frame.dataset.view = 'empty';
     }
-    input.focus();
+    if (!frame.classList.contains('shareMode')) input.focus();
   })();
 })();
