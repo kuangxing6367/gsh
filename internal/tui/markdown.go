@@ -250,7 +250,9 @@ func heading(s string) (level int, text string, ok bool) {
 	if n == 0 || n > 6 {
 		return 0, "", false
 	}
-	if n < len(s) && s[n] != ' ' && s[n] != '\t' {
+	// 宽松一点：# 后面允许直接跟正文（LLM 常写 "##标题" 不带空格），
+	// 仅当紧跟着又是 # 时才不算（那是更深的标题层级，交给 n 上限处理）。
+	if n < len(s) && s[n] == '#' {
 		return 0, "", false
 	}
 	return n, strings.TrimSpace(s[n:]), true

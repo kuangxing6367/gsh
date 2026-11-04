@@ -291,6 +291,39 @@ type registry struct {
 	// audit 操作审计日志：同样挂在唯一入口上，保证每一条调用（含被拦/不存在）
 	// 都被记录，新增工具无需各自埋点。
 	audit *AuditLog
+	// approver 交互式审批器（TUI 注入，可为 nil）。
+	// 标准档位下，高风险工具执行前先问用户 allow/deny/always。
+	approver api.ToolApprover
+	// alwaysAllowed 本进程内「总是放行」的工具名集合（用户选过 always 后写入）。
+	alwaysAllowed map[string]bool
+}
+
+// SetApprover 注入/清除交互式审批器。
+func (r *registry) SetApprover(a api.ToolApprover) {
+	r.mu.Lock()
+	r.approver = a
+	r.mu.Unlock()
+}
+
+// riskyTools 标准档位下执行前需确认的工具（破坏性 / 写类）。
+// 只读工具（read/glob/grep/list_dir）与网络读取（web_fetch/http_request）不在此列。
+var riskyTools = map[string]bool{
+	"bash":        true,
+	"write_file":  true,
+	"edit_file":   true,
+	"make_dir":    true,
+	"move_path":   true,
+	"copy_path":   true,
+	"delete_path": true,
+}
+
+// needsApproval 判断某工具在当前档位下是否需交互确认。
+// 完全权限档位跳过；只读档位由 Guard.Check 直接拦截，不会到这里。
+func (r *registry) needsApproval(name string) bool {
+	if r.guard != nil && (r.guard.Mode() == PermFull || r.guard.Mode() == PermReadOnly) {
+		return false
+	}
+	return riskyTools[name]
 }
 
 func (r *registry) Register(t api.Tool) error {
@@ -328,6 +361,31 @@ func (r *registry) Execute(ctx context.Context, call api.ToolCall) api.ToolResul
 	if reason := r.guard.Check(call.Name); reason != "" {
 		r.audit.recordFromCall(ctx, call, node, "blocked", reason, perm, false, nil, 0, time.Since(start).Milliseconds())
 		return api.ToolResult{CallID: call.ID, Name: call.Name, Content: "error: " + reason, IsError: true}
+	}
+	// 交互式确认：标准档位下、高风险工具、且用户没选过「总是放行」时才问。
+	if r.approver != nil && r.needsApproval(call.Name) {
+		r.mu.RLock()
+		always := r.alwaysAllowed[call.Name]
+		r.mu.RUnlock()
+		if !always {
+			dec, aerr := r.approver.Approve(ctx, call)
+			if aerr != nil {
+				r.audit.recordFromCall(ctx, call, node, "denied", "user cancelled: "+aerr.Error(), perm, false, nil, 0, time.Since(start).Milliseconds())
+				return api.ToolResult{CallID: call.ID, Name: call.Name, Content: "error: 用户取消了该工具调用", IsError: true}
+			}
+			if !dec.Allow {
+				r.audit.recordFromCall(ctx, call, node, "denied", "user denied", perm, false, nil, 0, time.Since(start).Milliseconds())
+				return api.ToolResult{CallID: call.ID, Name: call.Name, Content: "error: 用户拒绝了该工具调用", IsError: true}
+			}
+			if dec.Always {
+				r.mu.Lock()
+				if r.alwaysAllowed == nil {
+					r.alwaysAllowed = map[string]bool{}
+				}
+				r.alwaysAllowed[call.Name] = true
+				r.mu.Unlock()
+			}
+		}
 	}
 	out, err := t.Run(ctx, call.Args)
 	res := api.ToolResult{CallID: call.ID, Name: call.Name, Content: out}

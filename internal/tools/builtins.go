@@ -469,10 +469,16 @@ func (t *WriteFileTool) Run(_ context.Context, argsJSON string) (string, error) 
 			return "", err
 		}
 	}
+	var oldData []byte
+	if d, rerr := os.ReadFile(path); rerr == nil {
+		oldData = d
+	}
+	summary := fmt.Sprintf("wrote %s (%d bytes)", path, len(content))
+	diff := fileDiff(string(oldData), content, path)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("wrote %s (%d bytes)", path, len(content)), nil
+	return embedDiff(summary, diff), nil
 }
 
 // ---------- edit_file ----------
@@ -538,10 +544,12 @@ func (t *EditFileTool) Run(_ context.Context, argsJSON string) (string, error) {
 	} else {
 		src = strings.Replace(src, oldS, newS, 1)
 	}
+	summary := fmt.Sprintf("edited %s (%d replacement(s))", path, min(count, 1<<30))
+	diff := fileDiff(string(data), src, path)
 	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("edited %s (%d replacement(s))", path, min(count, 1<<30)), nil
+	return embedDiff(summary, diff), nil
 }
 
 func min(a, b int) int {

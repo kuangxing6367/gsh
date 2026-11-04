@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -50,7 +51,7 @@ func TestTUIView(t *testing.T) {
 
 	checks := map[string]string{
 		"title bar":       "# 新会话",
-		"session label":   "session",
+		"session label":   "testsess",
 		"user text":       "你好 gsh",
 		"user accent bar": "┃",
 		"exec tool line":  "* bash",
@@ -114,15 +115,21 @@ func TestArgSummary(t *testing.T) {
 	}
 }
 
-func TestResultNote(t *testing.T) {
-	if got := resultNote("a\n\nb\n", false); got != "(2)" {
-		t.Errorf("resultNote lines=%q", got)
+func TestToolNote(t *testing.T) {
+	if got := toolNote(false, "", "a\n\nb\n"); got != "(2)" {
+		t.Errorf("toolNote lines=%q", got)
 	}
-	if got := resultNote("x", true); got != "failed" {
-		t.Errorf("resultNote err=%q", got)
+	if got := toolNote(true, "", "x"); got != "failed" {
+		t.Errorf("toolNote err=%q", got)
 	}
-	if got := resultNote("", false); got != "" {
-		t.Errorf("resultNote empty=%q", got)
+	if got := toolNote(false, "", ""); got != "" {
+		t.Errorf("toolNote empty=%q", got)
+	}
+	if got := toolNote(false, "--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n", ""); got != "diff" {
+		t.Errorf("toolNote diff=%q", got)
+	}
+	if got := toolNote(false, "", "x\ny\nz"); got != "(3)" {
+		t.Errorf("toolNote detail=%q", got)
 	}
 }
 
@@ -132,5 +139,66 @@ func TestPermLabel(t *testing.T) {
 		if got := permLabel(in); got != want {
 			t.Errorf("permLabel(%q)=%q, want %q", in, got, want)
 		}
+	}
+}
+
+// feedKey 向模型投一个字符按键（如 'a' / 'A' / 'd'），返回更新后的模型。
+func feedKey(m *Model, r rune) *Model {
+	mm, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	return mm.(*Model)
+}
+
+// TestTUIPermissionPrompt 验证标准档位下高风险工具会弹出确认浮层，
+// 且 a/A/d 三种按键能把正确的裁决写回审批器（否则 loop goroutine 会一直阻塞）。
+func TestTUIPermissionPrompt(t *testing.T) {
+	// 允许：按 a
+	m := newTestModel(t, 100, 32)
+	ch := make(chan permDecision, 1)
+	m.perm = &permRequest{name: "bash", args: `{"command":"ls -la"}`, resp: ch}
+	view := m.View()
+	for _, want := range []string{"确认", "bash", "[a] 允许", "[A] 总是允许", "[d / esc] 拒绝", "ls -la"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("确认浮层缺少 %q\nview=\n%s", want, view)
+		}
+	}
+	feedKey(m, 'a')
+	select {
+	case d := <-ch:
+		if !d.allow || d.always {
+			t.Errorf("按 a → 应 allow 且非 always，got %+v", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("审批器未收到裁决（loop 会阻塞）")
+	}
+	if m.perm != nil {
+		t.Error("确认后 m.perm 应清空")
+	}
+
+	// 总是允许：按 A
+	m2 := newTestModel(t, 100, 32)
+	ch2 := make(chan permDecision, 1)
+	m2.perm = &permRequest{name: "write_file", args: `{"path":"a.go"}`, resp: ch2}
+	feedKey(m2, 'A')
+	select {
+	case d := <-ch2:
+		if !d.allow || !d.always {
+			t.Errorf("按 A → 应 allow 且 always，got %+v", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("审批器未收到裁决")
+	}
+
+	// 拒绝：按 d
+	m3 := newTestModel(t, 100, 32)
+	ch3 := make(chan permDecision, 1)
+	m3.perm = &permRequest{name: "delete_path", args: `{"path":"x"}`, resp: ch3}
+	feedKey(m3, 'd')
+	select {
+	case d := <-ch3:
+		if d.allow {
+			t.Errorf("按 d → 应 deny，got %+v", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("审批器未收到裁决")
 	}
 }

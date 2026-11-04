@@ -259,10 +259,13 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 `./gsh.exe -tui` 启动 opencode 风格终端界面（bubbletea 实现；布局与配色按 opencode dev 分支实际截图对齐，不是凭印象的「暗色 + 绿色」）。
 
 - 配色（截图采样）：画布 `#0a0a0a`、元素 `#141414`、输入框 `#1e1e1e`、正文 `#e8e8e8`、次级 `#909090`、边框 `#3a3a3a`、强调蓝 `#5898f0`
-- **顶部**：圆角标题条，`# 会话标题` 左、`session xxxx` 右
-- **消息区**：用户消息为「左侧蓝色竖条 + 浅色底块」（不是行内气泡）；助手为普通段落；工具行为 `* Tool args (n)`，读类工具用 `→ Read path`（无 ✓/✗ 图标）
+- **顶部**：圆角标题条，`# 会话标题` 左；右栏空闲时显示 `N 条 · sessionxxxx`，运行中显示 `运行中 mm:ss · sessionxxxx`，跑完显示 `mm:ss · N 条 · sessionxxxx`（不编 token/cost，避免假数字）
+- **消息区**：用户消息为「左侧蓝色竖条 + 浅色底块」（不是行内气泡）；助手为普通段落；工具行为 `* Tool args (n)`，读类工具用 `→ Read path`（无 ✓/✗ 图标）；写类工具（write/edit）的结果内嵌**统一 diff**，按 `+/-/块头` 着色
 - **底栏**：`◆ 模式 · 模型` 徽标 → 带蓝色左边条的圆角输入框 → `模式 模型 provider` 行 → 键位提示条（`enter 发送` / `shift+enter 换行` / `ctrl+c 退出`，运行中显示 `esc 停止`）
-- 交互：Enter 发送、Shift+Enter 换行、Esc 停止当前轮、Ctrl+C 退出
+- **交互**：
+  - Enter 发送、Shift+Enter 换行、Esc 停止当前轮 / 关闭浮层、Ctrl+C 退出
+  - `/help` 帮助浮层、`/sessions`（或 `Ctrl+P`）会话列表（↑/↓、j/k 选择，enter 打开，d 删除）、`/new`、`/clear` 开新会话或清空
+  - **交互式权限确认**（标准档位下）：bash/write/edit/make_dir/move/copy/delete 等高风险工具执行前弹出 `确认 <工具> → <参数>` 浮层，按 `a` 允许 / `A` 总是允许（本进程后续同类不再询问）/ `d` 或 `esc` 拒绝；只读档位直接拦截、完全档位不询问
 - 复用内核的 `loop.RunSession`：流式 delta 与 `tool_call/tool_result` 事件经 channel 回流，逐字流与工具行实时更新——TUI 只是 loop 的新展示面，与 Web UI、REPL 对等
 - **助手回复按 markdown 渲染**（`internal/tui/markdown.go`，自实现行级状态机，不引第三方 markdown 库）：
   - 块级：ATX 标题（`#`~`###`，去标记 + 分级加粗）、无序列表（统一 `•`）、有序列表（保留编号）、引用（左侧竖条 + 次级色）、分割线、围栏代码块（左竖条 + 浅底块 + 语言标签）
@@ -301,6 +304,11 @@ gsh 作为未来嵌进沙箱 / 运维体系的 harness，操作可追溯是刚�
 - [x] Web UI 1:1（会话树/轨迹/附件/权限/设置/能力面板/重命名/搜索/筛选）
 - [x] 终端 TUI（bubbletea，opencode 风格 1:1，复用 loop 流式事件）
 - [x] TUI markdown 渲染（标题/列表/引用/代码块/行内码/链接，按终端单元格宽度折行）
+- [x] TUI 写类工具内嵌统一 diff（着色渲染）
+- [x] TUI 斜杠命令 + 帮助浮层（`/help` `/sessions` `/new` `/clear`）
+- [x] TUI 会话列表 `Ctrl+P`（切换 / 删除 / 回放）
+- [x] TUI 顶栏实时计时与消息计数
+- [x] TUI 交互式权限确认（标准档位高风险工具 allow / always / deny）
 - [x] 操作审计日志（落盘 + 脱敏 + 查询 API + Web 展示面板）
 - [x] 工具的 workspace 白名单（Resolve 硬边界：绝对路径 / `..` / 符号链接越界，运行期开关）
 

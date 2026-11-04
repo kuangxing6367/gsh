@@ -128,12 +128,28 @@ type Event struct {
 // EventHandler 运行事件回调，可为 nil。
 type EventHandler func(Event)
 
+// ApprovalDecision 审批器对一次工具调用的裁决。
+type ApprovalDecision struct {
+	Allow  bool // 是否放行本次调用
+	Always bool // 是否把该工具名加入「本进程总是放行」集合
+}
+
+// ToolApprover 交互式权限审批器（TUI 实现）。
+// 工具处于「需要确认」档位时，registry 在其唯一执行入口调用它；
+// 返回 Allow=false 即拒绝执行，Always=true 表示后续同类工具不再询问。
+// 非交互场景（Web/REPL 或审批器为 nil）跳过确认，沿用既有权限档位。
+type ToolApprover interface {
+	Approve(ctx context.Context, call ToolCall) (ApprovalDecision, error)
+}
+
 // ToolRegistry 工具注册表服务。
 type ToolRegistry interface {
 	Register(t Tool) error
 	Execute(ctx context.Context, call ToolCall) ToolResult
 	Specs() []ToolSpec
 	Names() []string
+	// SetApprover 注入交互式审批器（TUI 用）。传 nil 关闭交互确认。
+	SetApprover(a ToolApprover)
 }
 
 // ctxKey 是 gsh 内部 context 键的类型（避免与第三方包字符串键冲突）。
