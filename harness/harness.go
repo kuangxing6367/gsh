@@ -99,6 +99,11 @@ func (h *Harness) RunTUI() error {
 	return tui.Run(h.k)
 }
 
+// RunTUIReadOnly 以只读浏览模式打开指定会话（TUI）：可滚动查看历史，禁止发送。
+func (h *Harness) RunTUIReadOnly(id string) error {
+	return tui.RunReadOnly(h.k, id)
+}
+
 // RunHeadless 一次性执行模式：单条输入 → 回复 → 退出。工具调用/结果会打印到终端。
 func (h *Harness) RunHeadless(ctx context.Context, prompt string) error {
 	lp, err := Use[api.Loop](h, "loop")

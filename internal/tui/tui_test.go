@@ -28,7 +28,7 @@ func (fakeLoop) RunSession(_ context.Context, _ string, _ string, _ api.StreamDe
 func newTestModel(t *testing.T, w, h int) *Model {
 	t.Helper()
 	k := kernel.New(&kernel.Config{DataDir: t.TempDir()})
-	m, err := NewModel(k, "testsession123", fakeLoop{})
+	m, err := NewModel(k, "testsession123", fakeLoop{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,5 +200,46 @@ func TestTUIPermissionPrompt(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("审批器未收到裁决")
+	}
+}
+
+// TestReadOnlyBlocksSend 验证只读模式下 send 不发送新消息、不进入 running。
+func TestReadOnlyBlocksSend(t *testing.T) {
+	m := newTestModel(t, 100, 32)
+	m.readOnly = true
+	m.ta.SetValue("这条不该发出去")
+	m.send()
+	if m.running {
+		t.Error("只读模式 send 不应进入 running")
+	}
+	if len(m.messages) != 0 {
+		t.Errorf("只读模式 send 不应追加用户消息，got %d", len(m.messages))
+	}
+}
+
+// TestToggleReadOnly 验证 /readonly 在只读与可编辑之间切换。
+func TestToggleReadOnly(t *testing.T) {
+	m := newTestModel(t, 100, 32)
+	if m.readOnly {
+		t.Fatal("默认应为可编辑")
+	}
+	m.runCommand("/readonly")
+	if !m.readOnly {
+		t.Error("/readonly 后应进入只读")
+	}
+	m.runCommand("/readonly")
+	if m.readOnly {
+		t.Error("再次 /readonly 应切回可编辑")
+	}
+}
+
+// TestReadOnlyTitleBar 验证只读模式顶栏显示「只读浏览」标记。
+func TestReadOnlyTitleBar(t *testing.T) {
+	m := newTestModel(t, 100, 32)
+	m.readOnly = true
+	m.messages = append(m.messages, displayMsg{role: roleUser, text: "hi"})
+	v := m.View()
+	if !strings.Contains(v, "只读浏览") {
+		t.Errorf("只读顶栏应含「只读浏览」，got:\n%s", v)
 	}
 }

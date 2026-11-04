@@ -32,6 +32,7 @@ func main() {
 		sessionID    = flag.String("s", "", "resume session id (enter TUI to continue)")
 		forkID       = flag.String("fork", "", "fork session id then resume")
 		replayID     = flag.String("replay", "", "replay session trajectory and exit")
+		viewID       = flag.String("view", "", "open session id in read-only browse mode (TUI)")
 	)
 	flag.Parse()
 	if *showVer && *headless == "" {
@@ -77,6 +78,10 @@ func main() {
 	case *webMode:
 		fmt.Printf("gsh web UI → http://localhost%s\n", *webAddr)
 		if err := h.Serve(*webAddr); err != nil {
+			fatal(err)
+		}
+	case *viewID != "":
+		if err := h.RunTUIReadOnly(*viewID); err != nil {
 			fatal(err)
 		}
 	case *tuiMode:

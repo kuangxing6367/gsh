@@ -39,6 +39,7 @@ cp config.example.json config.json   # 填 api_key
 ./gsh.exe -s <id>                                   # 恢复某会话并进入终端 UI（回放历史 + 继续提问）
 ./gsh.exe --fork <id>                               # 以某会话为蓝本派生新会话后进入
 ./gsh.exe -replay <id>                              # 非交互回放某会话的事件流（Trajectory 视图）
+./gsh.exe -view <id>                               # 只读浏览某会话（终端 UI，禁发送，可 /readonly 切回可编辑）
 ```
 
 `config.json` 含 API key，已在 `.gitignore` 中排除。
@@ -269,8 +270,9 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 - **底栏**：`◆ 模式 · 模型` 徽标 → 带蓝色左边条的圆角输入框 → `模式 模型 provider` 行 → 键位提示条（`enter 发送` / `shift+enter 换行` / `ctrl+c 退出`，运行中显示 `esc 停止`）
 - **交互**：
   - Enter 发送、Shift+Enter 换行、Esc 停止当前轮 / 关闭浮层、Ctrl+C 退出
-  - `/help` 帮助浮层、`/sessions`（或 `Ctrl+P`）会话列表（↑/↓、j/k 选择，enter 打开，d 删除）、`/new`、`/clear` 开新会话或清空
+  - `/help` 帮助浮层、`/sessions`（或 `Ctrl+P`）会话列表（↑/↓、j/k 选择，enter 打开，d 删除）、`/new`、`/clear` 开新会话或清空、`/readonly` 在「只读浏览 ⇄ 可编辑继续」间切换
   - **交互式权限确认**（标准档位下）：bash/write/edit/make_dir/move/copy/delete 等高风险工具执行前弹出 `确认 <工具> → <参数>` 浮层，按 `a` 允许 / `A` 总是允许（本进程后续同类不再询问）/ `d` 或 `esc` 拒绝；只读档位直接拦截、完全档位不询问
+- **只读浏览模式**：`-view <id>` 以只读方式进终端 UI 打开会话（顶栏标 `只读浏览`，底栏提示只读、禁发送，Ctrl+P 仍可切会话）；TUI 内随时 `/readonly` 切回可编辑继续
 - 复用内核的 `loop.RunSession`：流式 delta 与 `tool_call/tool_result` 事件经 channel 回流，逐字流与工具行实时更新——TUI 只是 loop 的新展示面，与 Web UI、REPL 对等
 - **助手回复按 markdown 渲染**（`internal/tui/markdown.go`，自实现行级状态机，不引第三方 markdown 库）：
   - 块级：ATX 标题（`#`~`###`，去标记 + 分级加粗）、无序列表（统一 `•`）、有序列表（保留编号）、引用（左侧竖条 + 次级色）、分割线、围栏代码块（左竖条 + 浅底块 + 语言标签）

@@ -115,6 +115,7 @@ type Model struct {
 	permCh chan *permRequest // 审批器 → Model
 	perm   *permRequest      // 当前待确认请求（nil=无）
 	pendingResume string    // 非空时，首帧尺寸就绪后定位并回放该会话
+	readOnly     bool      // 只读浏览模式：可滚动查看历史，禁止发送新消息
 }
 
 // permRequest 一次待确认的工具调用（审批器 → Model 的跨 goroutine 消息）。
@@ -165,7 +166,7 @@ func Run(k *kernel.Kernel) error {
 	if err != nil {
 		return err
 	}
-	m, err := NewModel(k, sess.ID(), lp)
+	m, err := NewModel(k, sess.ID(), lp, false)
 	if err != nil {
 		return err
 	}
@@ -188,7 +189,7 @@ func RunWithSession(k *kernel.Kernel, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	m, err := NewModel(k, sessionID, lp)
+	m, err := NewModel(k, sessionID, lp, false)
 	if err != nil {
 		return err
 	}
@@ -206,8 +207,42 @@ func RunWithSession(k *kernel.Kernel, sessionID string) error {
 	return err
 }
 
+// RunReadOnly 启动 TUI 以只读浏览模式打开指定会话：回放历史、可滚动查看，
+// 但不允许发送新消息（在 TUI 内用 /readonly 仍可切回可编辑继续）。
+func RunReadOnly(k *kernel.Kernel, sessionID string) error {
+	store, err := kernel.Use[api.SessionStore](k, "sessionStore")
+	if err != nil {
+		return err
+	}
+	if _, err := store.Open(sessionID); err != nil {
+		return err
+	}
+	lp, err := kernel.Use[api.Loop](k, "loop")
+	if err != nil {
+		return err
+	}
+	m, err := NewModel(k, sessionID, lp, true)
+	if err != nil {
+		return err
+	}
+	if list, e := store.ListMeta(); e == nil {
+		for _, s := range list {
+			if s.ID == sessionID {
+				m.title = s.Title
+				break
+			}
+		}
+	}
+	m.ta.Blur()
+	m.pendingResume = sessionID
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err = p.Run()
+	return err
+}
+
 // NewModel 构造 TUI 模型。lp 由调用方从内核取出后传入（便于测试注入假实现）。
-func NewModel(k *kernel.Kernel, sessID string, lp api.Loop) (*Model, error) {
+// readOnly 为 true 时进入只读浏览模式：可滚动查看历史，禁止发送新消息。
+func NewModel(k *kernel.Kernel, sessID string, lp api.Loop, readOnly bool) (*Model, error) {
 	if lp == nil {
 		return nil, fmt.Errorf("tui: nil loop")
 	}
@@ -235,6 +270,7 @@ func NewModel(k *kernel.Kernel, sessID string, lp api.Loop) (*Model, error) {
 		streamCh: make(chan streamEvent, 1024),
 		overlay:  "",
 		permCh:   permCh,
+		readOnly: readOnly,
 	}
 	// 注入交互式审批器（仅当 registry 存在；测试裸内核无 tools 插件则跳过）。
 	if reg, err := kernel.Use[api.ToolRegistry](k, "toolRegistry"); err == nil {
@@ -290,6 +326,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openSessions()
 			}
 			return m, nil
+		case m.readOnly:
+			// 只读浏览：除 ctrl+c / 浮层 / Ctrl+P 外，忽略一切输入（含发送与编辑）。
+			return m, nil
 		case m.running:
 			if msg.Type == tea.KeyEsc {
 				if m.cancel != nil {
@@ -335,6 +374,9 @@ func (m *Model) send() {
 	if strings.HasPrefix(text, "/") {
 		m.ta.Reset()
 		m.runCommand(text)
+		return
+	}
+	if m.readOnly {
 		return
 	}
 	if m.title == "新会话" {
@@ -577,7 +619,9 @@ func (m *Model) View() string {
 func (m *Model) renderTitleBar(w int) string {
 	left := "# " + m.title
 	right := shortID(m.sessID)
-	if m.running && !m.runStart.IsZero() {
+	if m.readOnly {
+		right = fmt.Sprintf("只读浏览 · %d 条 · %s", len(m.messages), shortID(m.sessID))
+	} else if m.running && !m.runStart.IsZero() {
 		right = fmt.Sprintf("运行中 %s · %s", fmtDur(time.Since(m.runStart)), shortID(m.sessID))
 	} else if m.lastDur > 0 {
 		right = fmt.Sprintf("%s · %d 条 · %s", fmtDur(m.lastDur), len(m.messages), shortID(m.sessID))
@@ -604,6 +648,28 @@ func (m *Model) renderFooter(w int) string {
 	model := m.model
 	if model == "" {
 		model = "gsh"
+	}
+
+	// 只读浏览模式：不渲染可输入光标，给出只读提示，滚动查看历史即可。
+	if m.readOnly {
+		badge := "  " + styleAccent.Render("◆") + " " + styleAccent.Render(m.mode) + styleMuted.Render(" · "+model)
+		inner := lipgloss.NewStyle().
+			Border(lipgloss.Border{Left: "┃"}, false, false, false, true).
+			BorderForeground(cAccent).
+			Padding(0, 1).
+			Render(styleDim.Render("只读浏览 · 滚动查看历史 · 输入 /readonly 切回可编辑"))
+		box := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(cBorder).
+			Background(cInput).
+			Width(maxInt(w-2, 10)).
+			Render(inner)
+		hint := padStyled(
+			styleDim.Render("  ctrl+p 切会话"),
+			styleDim.Render("ctrl+c 退出  "),
+			w,
+		)
+		return badge + "\n" + box + "\n" + hint
 	}
 
 	// 用 ◆ 而不用 opencode 的 ✻：✻/✦ 在 Cascadia Mono、Consolas 都没有字形，会变豆腐块。
@@ -675,17 +741,34 @@ func (m *Model) renderPermFooter(w int) string {
 
 // runCommand 处理斜杠命令（输入以 / 开头，已在 send 里分流）。
 func (m *Model) runCommand(text string) {
-	switch strings.Fields(text)[0] {
+	cmd := strings.Fields(text)[0]
+	switch cmd {
 	case "/help", "/?":
 		m.overlay = "help"
 	case "/sessions", "/s":
 		m.openSessions()
+	case "/readonly", "/ro":
+		// 在「只读浏览」与「可编辑继续」之间切换。
+		m.readOnly = !m.readOnly
+		if m.readOnly {
+			m.ta.Blur()
+		} else {
+			m.ta.Focus()
+		}
 	case "/new":
+		if m.readOnly {
+			m.errStr = "只读模式：先 /readonly 切回可编辑再 /new"
+			return
+		}
 		m.newSession()
 	case "/clear":
+		if m.readOnly {
+			m.errStr = "只读模式：先 /readonly 切回可编辑再 /clear"
+			return
+		}
 		m.newSession()
 	default:
-		m.errStr = "未知命令：" + strings.Fields(text)[0] + "（输入 /help 查看可用命令）"
+		m.errStr = "未知命令：" + cmd + "（输入 /help 查看可用命令）"
 	}
 }
 
@@ -869,6 +952,7 @@ func (m *Model) renderHelp(w int) string {
 		"    /sessions  打开会话列表（也可按 Ctrl+P）",
 		"    /new       开新会话",
 		"    /clear     清空当前会话",
+		"    /readonly  只读浏览 ⇄ 可编辑继续 切换",
 		"",
 		styleAccent.Render("  键位"),
 		"    Enter      发送（Shift+Enter 换行）",
