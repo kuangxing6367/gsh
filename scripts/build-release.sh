@@ -19,6 +19,17 @@ fi
 TAG="v${VER#v}"
 OUT="dist"
 
+# 依赖变动后这张表会过期，但文件还在、包也能打出来——只是声明里少了新模块。
+# 打之前对一下 go.mod 的修改时间，比 THIRD-PARTY-NOTICES.md 新就提醒重生成。
+if [ ! -f THIRD-PARTY-NOTICES.md ]; then
+  echo "缺少 THIRD-PARTY-NOTICES.md，先跑：go run ./scripts/gennotices > THIRD-PARTY-NOTICES.md" >&2
+  exit 1
+fi
+if [ go.mod -nt THIRD-PARTY-NOTICES.md ]; then
+  echo "警告：go.mod 比 THIRD-PARTY-NOTICES.md 新，依赖可能变了。" >&2
+  echo "      建议重新生成：go run ./scripts/gennotices > THIRD-PARTY-NOTICES.md" >&2
+fi
+
 rm -rf "$OUT"
 mkdir -p "$OUT"
 # 暂存目录：包内根目录叫 gsh-<tag>-<平台>，与 dist 根下的二进制不冲突。
@@ -50,11 +61,17 @@ targets=(
 
 stage() {
   # stage <目录> <二进制>：放入运行时需要的全部文件
+  #
+  # LICENSE 必须随包走：MIT 许可要求声明随 "all copies" 分发，压缩包就是 copies。
+  # THIRD-PARTY-NOTICES 同理——二进制静态链接了 20 多个 MIT/BSD 模块，
+  # 它们的版权声明得有地方落。这两份漏了，分发就不合规。
   local dir="$1" bin="$2"
   mkdir -p "$dir"
   cp "$bin" "$dir/"
   cp config.example.json "$dir/"
   cp README.md "$dir/"
+  cp LICENSE "$dir/"
+  cp THIRD-PARTY-NOTICES.md "$dir/"
 }
 
 package() {

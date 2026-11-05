@@ -373,5 +373,7 @@ Alpine、distroless 这类没有 glibc 的镜像**可以直接跑**——因为�
 
 [MIT](LICENSE) © 2026 kuangxing6367
 
-第三方依赖各自沿用其原协议（charmbracelet 系为 MIT；`golang.org/x/*` 为 BSD-3-Clause）。内核本身只用 Go 标准库。
+发布产物静态链接了若干第三方模块（主要是 charmbracelet 系 MIT、`golang.org/x/*` BSD-3-Clause），各自的版权声明与许可原文汇总在 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)，随每个发行包一并分发。该文件由 `scripts/gennotices` 生成，依赖变动后重新跑一次即可。
+
+文档站（`gsh.zgric.top`）随附 Inter 字体，按 SIL Open Font License 1.1 分发，许可见 [docs-site/public/OFL.txt](docs-site/public/OFL.txt)。
 
