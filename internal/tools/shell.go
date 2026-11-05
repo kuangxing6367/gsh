@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -45,7 +44,13 @@ func (s ShellSpec) String() string {
 
 // familyOf 从可执行文件名推断方言族；显式指定优先。
 func familyOf(bin string) ShellFamily {
-	base := strings.ToLower(filepath.Base(bin))
+	// 不能只用 filepath.Base：它按当前平台的分隔符切分，
+	// 在 Linux 上拿到 "C:\Windows\System32\cmd.exe" 会原样返回整串，
+	// 于是 Windows 路径被判成 POSIX。配置常常是跨平台共用的，两种分隔符都要认。
+	base := strings.ToLower(bin)
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
 	base = strings.TrimSuffix(base, ".exe")
 	switch base {
 	case "cmd":
