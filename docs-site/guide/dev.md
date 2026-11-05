@@ -11,6 +11,27 @@ go test ./...
 go build -o gsh . && ./gsh -tui
 ```
 
+## 打包与二进制兼容
+
+```bash
+scripts/build-release.sh 0.2.0   # 8 个平台，输出到 dist/
+```
+
+产物是静态链接的 Go 二进制，不依赖 glibc。打包时会逐个校验 Linux 产物：含 `PT_INTERP`、有 `DT_NEEDED`、或引用了 `GLIBC_x.y` 版本，直接构建失败。
+
+必须校验的原因：CI 在 ubuntu runner 上编 `linux/amd64` 属于同平台编译，CGO 默认为 1。漏掉 `CGO_ENABLED=0` 就会绑死 runner 的 glibc（比如 2.39），产物在 CentOS 7 上直接报 `version 'GLIBC_2.34' not found`——开发机上完全看不出来。
+
+真正跑不动的边界在别处：
+
+| 限制 | 边界 |
+|---|---|
+| 内核版本 | Linux ≥ 3.2（loong64 需 ≥ 5.19） |
+| amd64 指令集 | `GOAMD64=v1`，所有 64 位 x86 |
+| arm64 指令集 | `GOARM64=v8.0` |
+| arm 指令集 | `GOARM=7`，需 VFPv3（Cortex-A）；ARMv5 / ARM11 不行 |
+
+Alpine、distroless 这类无 glibc 镜像可以直接跑。CGO 关闭时 `os/user` 只读 `/etc/passwd` 和 `/etc/group`，靠 NSS 查 LDAP / SSSD 的用户名解析不可用。
+
 ## 目录结构
 
 ```text

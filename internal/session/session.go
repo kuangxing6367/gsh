@@ -4,6 +4,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"gsh/internal/api"
 	"gsh/internal/kernel"
@@ -39,6 +41,9 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 	}
 	if dir == "" {
 		dir = filepath.Join(ctx.DataDir(), "sessions")
+	} else if !filepath.IsAbs(dir) {
+		// 配置里的相对路径锚定数据目录，避免随启动时的当前工作目录漂移。
+		dir = filepath.Join(ctx.BaseDir(), dir)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("session: mkdir %s: %w", dir, err)
@@ -61,7 +66,7 @@ func (s *store) titlePath(id string) string { return filepath.Join(s.dir, id+".t
 
 func (s *store) New() (api.Session, error) {
 	id := time.Now().UTC().Format("20060102-150405") + "-" + randSuffix()
-	f, err := os.OpenFile(s.path(id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(s.path(id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("session: create: %w", err)
 	}
@@ -242,7 +247,7 @@ func (s *session) Append(m api.Message) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -251,6 +256,37 @@ func (s *session) Append(m api.Message) error {
 		return err
 	}
 	s.msgs = append(s.msgs, m)
+	return nil
+}
+
+// Replace 用压缩后的消息序列整体重写会话文件。
+// 先写同目录临时文件再 rename，保证任何时刻磁盘上都是一份完整会话；
+// 失败时原文件不动，调用方（压缩逻辑）会降级为「不压缩继续跑」。
+func (s *session) Replace(msgs []api.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.load(); err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	for _, m := range msgs {
+		b, err := json.Marshal(m)
+		if err != nil {
+			return fmt.Errorf("session: marshal compacted message: %w", err)
+		}
+		buf.Write(b)
+		buf.WriteByte('\n')
+	}
+	tmp := s.path + ".compact.tmp"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("session: write compacted file: %w", err)
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("session: replace compacted file: %w", err)
+	}
+	s.msgs = append([]api.Message(nil), msgs...)
+	s.loadded = true
 	return nil
 }
 
@@ -307,7 +343,7 @@ func (s *store) Rename(id, title string) error {
 	if r := []rune(title); len(r) > max {
 		title = string(r[:max])
 	}
-	return os.WriteFile(s.titlePath(id), []byte(title), 0o644)
+	return os.WriteFile(s.titlePath(id), []byte(title), 0o600)
 }
 
 // stripAttachBlocks 去掉发送时拼进消息的附件内容块。
@@ -328,4 +364,132 @@ func stripAttachBlocks(s string) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// Search 在会话正文里做子串检索（大小写不敏感）。
+//
+// 只扫文本内容，不扫工具参数 JSON：用户找的是「哪次对话里聊过这个」，
+// 不是「哪个命令里出现过这个字符串」。
+func (s *store) Search(query string, limit int) ([]api.SessionHit, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, fmt.Errorf("检索词不能为空")
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	ids, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	ql := strings.ToLower(q)
+	var hits []api.SessionHit
+	for _, id := range ids {
+		meta := api.SessionHit{ID: id}
+		if fi, err := os.Stat(s.path(id)); err == nil {
+			meta.Updated = fi.ModTime()
+		}
+		meta.Title = s.titleOf(id)
+
+		f, err := os.Open(s.path(id))
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if line == "" {
+				continue
+			}
+			var m api.Message
+			if json.Unmarshal([]byte(line), &m) != nil {
+				continue
+			}
+			if m.Role == api.RoleSystem || m.Role == api.RoleTool {
+				continue
+			}
+			sn, n := snippetOf(m.Content, ql)
+			if n == 0 {
+				continue
+			}
+			meta.Count += n
+			if meta.Snippet == "" {
+				prefix := ""
+				switch m.Role {
+				case api.RoleUser:
+					prefix = "你："
+				case api.RoleAssistant:
+					prefix = "助手："
+				}
+				meta.Snippet = prefix + sn
+			}
+		}
+		f.Close()
+		if meta.Count > 0 {
+			hits = append(hits, meta)
+			if len(hits) >= limit {
+				break
+			}
+		}
+	}
+	return hits, nil
+}
+
+// titleOf 取自定义标题，没有则用首条用户消息的摘要。
+func (s *store) titleOf(id string) string {
+	if raw, err := os.ReadFile(s.titlePath(id)); err == nil {
+		if t := strings.TrimSpace(string(raw)); t != "" {
+			return t
+		}
+	}
+	f, err := os.Open(s.path(id))
+	if err != nil {
+		return "新会话"
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		var m api.Message
+		if json.Unmarshal([]byte(sc.Text()), &m) != nil || m.Role != api.RoleUser {
+			continue
+		}
+		if t := strings.TrimSpace(m.Content); t != "" {
+			return summarize(t)
+		}
+	}
+	return "新会话"
+}
+
+// snippetOf 返回命中处前后一小段文本与该文本内的命中次数。
+func snippetOf(text, lowerQuery string) (string, int) {
+	if text == "" || lowerQuery == "" {
+		return "", 0
+	}
+	lower := strings.ToLower(text)
+	n := strings.Count(lower, lowerQuery)
+	if n == 0 {
+		return "", 0
+	}
+	idx := strings.Index(lower, lowerQuery)
+	runes := []rune(text)
+	// 把字节下标换成 rune 下标，避免在中文里切出半个字符。
+	ri := utf8.RuneCountInString(text[:idx])
+	start := ri - 40
+	if start < 0 {
+		start = 0
+	}
+	end := ri + utf8.RuneCountInString(lowerQuery) + 60
+	if end > len(runes) {
+		end = len(runes)
+	}
+	sn := strings.TrimSpace(strings.Join(strings.Fields(string(runes[start:end])), " "))
+	if start > 0 {
+		sn = "…" + sn
+	}
+	if end < len(runes) {
+		sn += "…"
+	}
+	return sn, n
 }

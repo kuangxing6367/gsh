@@ -27,6 +27,7 @@ type WebFetchTool struct{}
 func (t *WebFetchTool) Spec() api.ToolSpec {
 	return api.ToolSpec{
 		Name:        "web_fetch",
+		ReadOnly:    true,
 		Description: "Fetch a URL and return readable text (HTML is stripped of tags/scripts). For raw bodies, status codes or non-GET methods use http_request.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -171,9 +172,7 @@ func (t *HTTPRequestTool) Run(ctx context.Context, argsJSON string) (string, err
 			text = buf.String()
 		}
 	}
-	if len(text) > maxToolOutput {
-		text = text[:maxToolOutput] + "\n...[truncated]"
-	}
+	text = clipAt(text, maxToolOutput)
 	b.WriteString(text)
 	return b.String(), nil
 }

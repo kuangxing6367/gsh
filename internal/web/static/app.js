@@ -48,7 +48,12 @@
     permission: 'standard',
     attachments: [],     // 待发送附件 {name,size,text}
     search: '',          // 侧栏会话搜索关键字
+    searchHits: null,    // 后端全文检索结果（非空时侧栏显示片段）
     filter: 'all',       // 会话时间筛选：all|today|3d
+    detail: 1,           // 展示档 0 简洁 / 1 标准 / 2 详细
+    tokens: null,        // 最近一轮用量 {prompt,completion,total}
+    firstTokenAt: 0,     // 首字时间，用于 TTFT
+    ttft: 0,
   };
 
   const frame = $('#frame');
@@ -134,15 +139,19 @@
     const q = (S.search || '').trim().toLowerCase();
     const f = FILTERS.find((x) => x[0] === S.filter) || FILTERS[0];
     const byTime = S.sessions.filter(f[2]);
-    const shown = q
-      ? byTime.filter((x) => String(x.title || '').toLowerCase().includes(q)).slice(0, 30)
-      : byTime.slice(0, 12);
+    // 检索模式：结果来自后端全文匹配，带命中片段；否则按标题过滤。
+    const shown = S.searchHits
+      ? S.searchHits
+      : q
+        ? byTime.filter((x) => String(x.title || '').toLowerCase().includes(q)).slice(0, 30)
+        : byTime.slice(0, 12);
     shown.forEach((s) => {
       const item = el('button', 'convItem');
       item.dataset.id = s.id;
       if (s.id === S.currentId) item.dataset.active = 'true';
       item.appendChild(el('span', 'convName', s.title || '新会话'));
       if (s.updated) item.appendChild(el('span', 'convAge', ageLabel(s.updated)));
+      if (s.snippet) item.appendChild(el('span', 'convSnippet', s.snippet));
       item.onclick = () => openSession(s.id);
       item.oncontextmenu = (e) => {
         e.preventDefault();
@@ -454,6 +463,10 @@
   // ---------- send ----------
 
   async function send() {
+    // 语音还在听时先终止并丢弃：定稿有延迟，此刻发出去会落下最后半句，
+    // 而且识别结果会回填进刚被清空的输入框，变成一条无主消息。
+    voiceStop(true);
+
     const text = input.value.trim();
     if ((!text && !S.attachments.length) || S.running) return;
 
@@ -477,6 +490,7 @@
       toast('消息组装失败：' + e.message, 'error');
       return;
     }
+    const imgs = imagePaths();
     input.value = '';
     S.attachments = [];
     renderAttach();
@@ -498,13 +512,17 @@
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt, session_id: S.currentId, run_id: runId }),
+        body: JSON.stringify({ prompt: prompt, session_id: S.currentId, run_id: runId, images: imgs }),
         signal: ctrl.signal,
       });
       if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
 
       await consumeSSE(res.body, (ev, data) => {
         if (ev === 'delta') {
+          if (!S.firstTokenAt && S.startedAt) {
+            S.firstTokenAt = Date.now();
+            S.ttft = S.firstTokenAt - S.startedAt;
+          }
           appendAssistantText(t, data.text || '');
         } else if (ev === 'tool_call') {
           const entry = appendToolRow(t, data.name, data.args);
@@ -522,6 +540,27 @@
             finishToolRow(entry, data.data || '', isErr);
           }
           scrollToBottom();
+        } else if (ev === 'reason') {
+          appendReason(t, data.data || '');
+        } else if (ev === 'usage') {
+          const u = data.usage || {};
+          S.tokens = { prompt: u.prompt_tokens || 0, completion: u.completion_tokens || 0, total: u.total_tokens || 0, estimated: !!u.estimated };
+          updateStats();
+          const tag = u.estimated ? '（估算）' : '';
+          appendStatus(t, 'done', 'token',
+            `输入 ${u.prompt_tokens || 0} · 输出 ${u.completion_tokens || 0} · 合计 ${u.total_tokens || 0}${tag}`);
+        } else if (ev === 'todo') {
+          renderTodoBar(data.todo || []);
+        } else if (ev === 'compacted') {
+          appendStatus(t, 'done', '上下文压缩', data.data || '');
+        } else if (ev === 'notice') {
+          // 后端主动告知的降级情况（例如附件被丢弃）。
+          // 不放进回答正文：它不是模型说的话，混进去会让人以为模型看到了图。
+          const msg = data.text || data.data || '';
+          if (msg) {
+            toast(msg, 'error');
+            appendStatus(t, 'done', '提示', msg);
+          }
         } else if (ev === 'final') {
           if (data.data && !t.text) setAssistantHTML(t, window.renderMarkdown(data.data));
           scrollToBottom();
@@ -565,6 +604,37 @@
     }
   }
 
+  // 思考过程折叠成一行：累积全文但只露出开头预览，点击可展开/收起。
+  // 逐字刷屏是长推理最劝退的体验，所以这里刻意不做逐 token 渲染。
+  function appendReason(t, delta) {
+    t.reasonText = (t.reasonText || '') + delta;
+    if (!t.reasonRow) {
+      const row = el('div', 'statusRow');
+      row.dataset.kind = 'reason';
+      row.appendChild(el('span', 'dot'));
+      row.appendChild(el('span', null, '思考'));
+      const detail = el('span', 'detail');
+      detail.addEventListener('click', () => {
+        row.dataset.expanded = row.dataset.expanded === '1' ? '0' : '1';
+        renderReasonPreview(t);
+      });
+      row.appendChild(detail);
+      t.reasonDetail = detail;
+      t.reasonRow = row;
+      t.root.appendChild(row);
+    }
+    renderReasonPreview(t);
+    scrollToBottom();
+  }
+
+  function renderReasonPreview(t) {
+    const full = (t.reasonText || '').replace(/\s+/g, ' ').trim();
+    // 完全档直接摊开思考全文：这一档的意义就是「不过滤过程」。
+    const expanded = S.detail >= 3 || (t.reasonRow && t.reasonRow.dataset.expanded === '1');
+    const shown = expanded || full.length <= 72 ? full : full.slice(0, 72) + '…';
+    t.reasonDetail.textContent = '— ' + shown + ` (${full.length} 字${expanded ? '，点击收起' : '，点击展开'})`;
+  }
+
   function appendStatus(t, kind, label, detail) {
     const row = el('div', 'statusRow');
     row.dataset.kind = kind === 'stopped' ? 'done' : kind;
@@ -606,6 +676,63 @@
     }
   }
 
+  // ---------- 展示档 ----------
+
+  // 四档与终端一致：0 简洁 / 1 标准 / 2 详细 / 3 完全。
+  const DETAIL_LABELS = ['简洁', '标准', '详细', '完全'];
+
+  function setDetail(d) {
+    S.detail = Math.max(0, Math.min(DETAIL_LABELS.length - 1, d));
+    frame.dataset.detail = String(S.detail);
+    const btn = $('#detailBtn');
+    if (btn) btn.querySelector('span').textContent = DETAIL_LABELS[S.detail];
+    try { localStorage.setItem('gsh.detail', String(S.detail)); } catch { /* 隐私模式忽略 */ }
+  }
+
+  $('#detailBtn').onclick = () => setDetail((S.detail + 1) % DETAIL_LABELS.length);
+
+  // ---------- 主题 ----------
+
+  function setTheme(t) {
+    document.documentElement.dataset.theme = t;
+    const use = document.querySelector('#themeBtn use');
+    if (use) use.setAttribute('href', t === 'light' ? '#i-sun' : '#i-moon');
+    try { localStorage.setItem('gsh.theme', t); } catch { /* 同上 */ }
+  }
+
+  $('#themeBtn').onclick = () => {
+    setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+  };
+
+  // ---------- 计划清单 ----------
+
+  function renderTodoBar(items) {
+    const bar = $('#todoBar');
+    if (!bar) return;
+    if (!items || !items.length) {
+      bar.hidden = true;
+      bar.innerHTML = '';
+      return;
+    }
+    bar.hidden = false;
+    bar.innerHTML = '';
+    const done = items.filter((x) => x.status === 'done').length;
+    const head = el('span', 'todoHead', '计划 ' + done + '/' + items.length);
+    bar.appendChild(head);
+    items.forEach((it) => {
+      const row = el('span', 'todoItem');
+      row.dataset.status = it.status || 'pending';
+      row.textContent = (it.status === 'done' ? '✓ ' : it.status === 'in_progress' ? '▸ ' : '· ') + it.text;
+      bar.appendChild(row);
+    });
+  }
+
+  function resetRunStats() {
+    S.firstTokenAt = 0;
+    S.ttft = 0;
+    S.tokens = null;
+  }
+
   function setRunning(v) {
     S.running = v;
     sendBtn.dataset.mode = v ? 'stop' : 'send';
@@ -615,6 +742,7 @@
     input.disabled = false;
     if (v) {
       S.startedAt = Date.now();
+      resetRunStats();
       updateStats();
     }
   }
@@ -627,6 +755,8 @@
       const sec = Math.floor((Date.now() - S.startedAt) / 1000);
       parts.push(fmtDur(sec));
     }
+    if (S.ttft) parts.push('首字 ' + (S.ttft / 1000).toFixed(1) + 's');
+    if (S.tokens) parts.push('token ' + S.tokens.total + (S.tokens.estimated ? '~' : ''));
     if (S.model) parts.push(S.model);
     const bar = $('#statsBar');
     bar.innerHTML = '';
@@ -653,6 +783,12 @@
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
+      // 录音中按回车：先把话落定成文字，不直接发。
+      // 语音定稿有延迟，这一刻发出去会少最后半句；也让「先看再发」这一步不被回车绕过去。
+      if ($('#micBtn').dataset.listening === 'true') {
+        voiceStop(false);
+        return;
+      }
       send();
     }
   });
@@ -700,7 +836,15 @@
     attachRow.hidden = false;
     S.attachments.forEach((a, i) => {
       const chip = el('div', 'attachChip');
-      chip.appendChild(svg('i-file', 12));
+      if (a.kind === 'image') {
+        chip.classList.add('attachChipImg');
+        const img = el('img', 'attachThumb');
+        img.src = a.url;
+        img.alt = a.name;
+        chip.appendChild(img);
+      } else {
+        chip.appendChild(svg('i-file', 12));
+      }
       chip.appendChild(el('span', 'attachName', a.name));
       chip.appendChild(el('span', 'attachSize', fmtSize(a.size)));
       const x = el('button', 'attachRemove');
@@ -716,6 +860,18 @@
     autoGrow();
   }
 
+  // 图片不走「读成文本」这条路：它是喂给模型看的，不是喂给模型读的。
+  // 先传到 uploads 目录，再把路径随消息发出去，由模型层读成 data URL。
+  const IMG_MAX = 8 * 1024 * 1024;
+
+  async function uploadImage(f) {
+    const fd = new FormData();
+    fd.append('file', f);
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }
+
   attachInput.onchange = async () => {
     for (const f of attachInput.files) {
       if (S.attachments.length >= 8) {
@@ -724,6 +880,19 @@
       }
       if (S.attachments.some((a) => a.name === f.name && a.size === f.size)) {
         continue; // 同名同大小视为重复
+      }
+      if (f.type && f.type.indexOf('image/') === 0) {
+        if (f.size > IMG_MAX) {
+          toast(f.name + ' 超过 ' + fmtSize(IMG_MAX) + '，未添加', 'error');
+          continue;
+        }
+        try {
+          const up = await uploadImage(f);
+          S.attachments.push({ kind: 'image', name: f.name, size: f.size, path: up.path, url: up.url });
+        } catch (e) {
+          toast('上传 ' + f.name + ' 失败：' + e.message, 'error');
+        }
+        continue;
       }
       if (f.size > ATTACH_MAX) {
         toast(f.name + ' 超过 ' + fmtSize(ATTACH_MAX) + '，未添加', 'error');
@@ -749,6 +918,7 @@
     if (!S.attachments.length) return text;
     const parts = [text];
     S.attachments.forEach((a) => {
+      if (a.kind === 'image') return; // 图片走 images 字段，不再塞进文本
       const head = '\n--- 附件 ' + a.name + '（' + fmtSize(a.size) + '）---\n';
       const tail = '\n--- 附件结束 ---';
       parts.push(head + a.text + tail);
@@ -758,7 +928,12 @@
 
   // 发送时随消息带上附件元信息，回显卡片用（内容已在 composePrompt 里）。
   function attachmentSummary() {
-    return S.attachments.map((a) => ({ name: a.name, size: a.size }));
+    return S.attachments.map((a) => ({ name: a.name, size: a.size, url: a.url || '' }));
+  }
+
+  // 只把图片附件的本地路径发给后端。
+  function imagePaths() {
+    return S.attachments.filter((a) => a.kind === 'image').map((a) => a.path);
   }
 
   $('#newSessionBtn').onclick = newSession;
@@ -772,8 +947,118 @@
   $('#modelBtn').onclick = openSettings;
   $('#permBtn').onclick = openPermission;
   $('#attachBtn').onclick = () => $('#attachInput').click();
+  setupVoiceInput();
   $('#addWorkspace').onclick = () => openWorkspacePicker(S.workspace);
   $('#wsPicker').onclick = () => openWorkspacePicker(S.workspace);
+
+
+  // ---------- voice input ----------
+  //
+  // 语音只做「转文字」，不做「直接送模型」：
+  // 识别结果填进输入框，由用户删改后再自己按发送。
+  // 理由是纠错时机——识别错一个路径或标识符，直接发出去要重来一轮；
+  // 填进输入框，错字只是改几个字符。语音识别目前的准确率撑不起前者。
+
+  // 由 setupVoiceInput 注入；浏览器不支持语音时保持空实现，
+  // 这样发送路径不需要到处判断特性是否存在。
+  let voiceStop = () => {};
+
+  // 中文结尾不补空格，西文结尾补——混说时否则会粘成一个词。
+  const CJK_END = /\p{Script=Han}$/u;
+
+  // joinSpoken 把新说的内容接在已有文本后面，只在西文之间补空格。
+  function joinSpoken(base, added) {
+    if (!added) return base;
+    if (!base) return added;
+    return base + (CJK_END.test(base) ? '' : ' ') + added;
+  }
+
+  function setupVoiceInput() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const btn = $('#micBtn');
+    if (!SR) {
+      btn.hidden = true; // 浏览器不支持就干脆不出现，不做假按钮
+      return;
+    }
+    btn.hidden = false;
+
+    const input = $('#input');
+    let rec = null;
+    let listening = false;
+    let baseText = '';   // 开口前的已有内容，识别过程中的重写都以它为底
+    let finalText = '';  // 本轮已定稿的文字
+    let discard = false; // 由发送触发的中止：定稿结果不要再回填
+
+    function stop(drop) {
+      if (drop) discard = true;
+      listening = false;
+      btn.dataset.listening = 'false';
+      if (rec) {
+        try { rec.stop(); } catch (e) { /* 已经停了 */ }
+      }
+    }
+
+    voiceStop = (drop) => { if (listening) stop(drop); };
+
+    btn.onclick = () => {
+      if (listening) { stop(); return; }
+
+      rec = new SR();
+      rec.lang = (navigator.language || 'zh-CN').replace('_', '-');
+      rec.continuous = true;
+      rec.interimResults = true;
+      baseText = input.value;
+      finalText = '';
+      listening = true;
+      btn.dataset.listening = 'true';
+
+      rec.onresult = (ev) => {
+        let interim = '';
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const r = ev.results[i];
+          if (r.isFinal) {
+            finalText = joinSpoken(finalText, r[0].transcript);
+          } else {
+            interim += r[0].transcript;
+          }
+        }
+        // 中间结果只是预览，随时会被下一句覆盖；定稿后才落成正式内容。
+        input.value = joinSpoken(baseText, finalText + interim);
+        input.dispatchEvent(new Event('input')); // 触发高度自适应
+      };
+
+      rec.onerror = (ev) => {
+        stop();
+        if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+          toast('麦克风未授权，请在浏览器设置里允许后重试', 'error');
+        } else if (ev.error !== 'aborted') {
+          toast('语音识别失败：' + ev.error, 'error');
+        }
+      };
+
+      rec.onend = () => {
+        const drop = discard;
+        discard = false;
+        // 定稿内容留在输入框里，光标移到末尾方便继续编辑。
+        // 若这次中止是发送引起的，就不要回填——否则消息已经发出，输入框却又冒出文字。
+        if (!drop && finalText) {
+          input.value = joinSpoken(baseText, finalText);
+          input.dispatchEvent(new Event('input'));
+        }
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        stop();
+      };
+
+      try {
+        rec.start();
+      } catch (e) {
+        stop();
+        toast('无法启动语音识别：' + e.message, 'error');
+      }
+    };
+
+  }
 
   // ---------- workspace picker ----------
 
@@ -951,13 +1236,32 @@
     const header = document.querySelector('.wsHeader');
     header.parentNode.insertBefore(box, header.nextSibling);
     box.focus();
+    // 输入防抖 → 后端全文检索（正文命中才找得到，标题过滤只覆盖一部分）。
+    let timer = 0;
     box.oninput = () => {
       S.search = box.value;
-      renderSidebar();
+      const q = box.value.trim();
+      clearTimeout(timer);
+      if (!q) {
+        S.searchHits = null;
+        renderSidebar();
+        return;
+      }
+      timer = setTimeout(async () => {
+        try {
+          const d = await api('/api/sessions?q=' + encodeURIComponent(q));
+          S.searchHits = (d.hits || []).length ? d.hits : [];
+        } catch {
+          S.searchHits = [];
+        }
+        renderSidebar();
+      }, 250);
     };
     box.onkeydown = (e) => {
       if (e.key === 'Escape') {
         S.search = '';
+        S.searchHits = null;
+        clearTimeout(timer);
         box.remove();
         renderSidebar();
       }
@@ -1061,12 +1365,13 @@
 
   // ---------- permission ----------
 
-  // 权限档位：三档，对应工具层的 Guard。
+  // 权限档位：四档。前三个对应工具层的 Guard，plan 是「只读 + 先出方案」的组合档。
   // 切换后下一次工具调用立即生效，不需要重启。
   const PERM_OPTIONS = [
     ['read_only', '只读', '仅读取与网络访问。不执行命令、不改文件。'],
     ['standard', '标准', '可读写文件与执行命令。破坏性命令仍被拦截。'],
     ['full', '完全权限', '破坏性命令放行。灾难性命令（如 rm -rf /）仍然拦截。'],
+    ['plan', '计划', '只读 + 先出方案。读文件、搜索照常，写操作禁用；方案给出后停下等确认。'],
   ];
 
   function permLabelOf(mode) {
@@ -1530,6 +1835,15 @@
   });
 
   (async function boot() {
+    try {
+      const d = localStorage.getItem('gsh.detail');
+      if (d !== null) setDetail(parseInt(d, 10) || 0);
+      else setDetail(1);
+      setTheme(localStorage.getItem('gsh.theme') || 'dark');
+    } catch {
+      setDetail(1);
+      setTheme('dark');
+    }
     await refresh();
     autoGrow();
     if (routeFromHash()) {

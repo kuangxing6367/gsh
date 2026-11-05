@@ -1,5 +1,5 @@
 // Package web WebUI 插件：HTTP 服务 + SSE 流式对话 + 会话管理。
-// 前端 embed 进二进制，保持单文件分发；API 面按 DSH Web UI 的交互需要设计。
+// 前端 embed 进二进制，保持单文件分发。
 package web
 
 import (
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,13 +47,17 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 			addr = v
 		}
 	}
-	ctx.Provide("webServer", &Server{addr: addr})
+	ctx.Provide("webServer", &Server{addr: addr, dataDir: ctx.DataDir()})
+	// 启动时清一次历史上传：上次进程退出时可能已攒下过期文件。
+	// 异步执行，不影响首屏。
+	go pruneUploads(filepath.Join(ctx.DataDir(), "uploads"))
 	return nil
 }
 
 // Server HTTP 服务句柄（main 调 Run 阻塞启动）。
 type Server struct {
-	addr string
+	addr    string
+	dataDir string // 上传附件落地目录的父级（.gsh/web）
 }
 
 // SetAddr 运行时覆盖监听地址（main 的 -addr flag）。
@@ -79,14 +84,18 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	reg, _ := kernel.Use[api.ToolRegistry](k, "toolRegistry")
 
 	w := &webAPI{
-		k:     k,
-		loop:  loopSvc,
-		store: store,
-		reg:   reg,
-		runs:  map[string]context.CancelFunc{},
+		k:         k,
+		loop:      loopSvc,
+		store:     store,
+		reg:       reg,
+		runs:      map[string]context.CancelFunc{},
+		uploadDir: filepath.Join(s.dataDir, "uploads"),
 	}
 	if g, err := kernel.Use[*tools.Guard](k, "guard"); err == nil {
 		w.guard = g
+	}
+	if ps, err := kernel.Use[api.PermissionSwitch](k, "permission"); err == nil {
+		w.perm = ps
 	}
 	if a, err := kernel.Use[*tools.AuditLog](k, "audit"); err == nil {
 		w.audit = a
@@ -98,6 +107,8 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	mux.HandleFunc("POST /api/session/delete", w.handleSessionDelete)
 	mux.HandleFunc("POST /api/session/rename", w.handleSessionRename)
 	mux.HandleFunc("POST /api/chat", w.handleChat)
+	mux.HandleFunc("POST /api/upload", w.handleUpload)
+	mux.HandleFunc("GET /api/asset", w.handleAsset)
 	mux.HandleFunc("POST /api/stop", w.handleStop)
 	mux.HandleFunc("POST /api/settings", w.handleSettings)
 	mux.HandleFunc("GET /api/permission", w.handlePermissionGet)
@@ -107,6 +118,8 @@ func (s *Server) Run(k *kernel.Kernel) error {
 	mux.HandleFunc("POST /api/workspace", w.handleSetWorkspace)
 	mux.HandleFunc("POST /api/workspace/restrict", w.handleRestrictWorkspace)
 	mux.HandleFunc("GET /api/audit", w.handleAudit)
+	mux.HandleFunc("GET /api/models", w.handleModels)
+	mux.HandleFunc("POST /api/models/use", w.handleModelUse)
 
 	srv := &http.Server{Addr: s.addr, Handler: mux}
 	return srv.ListenAndServe()
@@ -119,6 +132,11 @@ type webAPI struct {
 	reg   api.ToolRegistry
 	guard *tools.Guard
 	audit *tools.AuditLog
+	// perm 是带 plan 档的完整切换器；guard 只认四个 Permission 枚举，
+	// 少了它 Web 就永远切不到计划模式。
+	perm api.PermissionSwitch
+
+	uploadDir string
 
 	mu   sync.Mutex
 	runs map[string]context.CancelFunc
@@ -133,8 +151,17 @@ func (w *webAPI) handleState(rw http.ResponseWriter, r *http.Request) {
 		httpError(rw, http.StatusInternalServerError, err.Error())
 		return
 	}
+	models, active, aux := w.modelState()
+	// 多模型写法下顶层没有 model 字段，顶栏应显示当前选中的模型名。
+	shownModel := w.llmString("model")
+	if active != "" {
+		shownModel = active
+	}
 	writeJSON(rw, map[string]any{
-		"model":              w.llmString("model"),
+		"models":             models,
+		"model_active":       active,
+		"model_aux":          aux,
+		"model":              shownModel,
 		"provider":           w.llmString("provider"),
 		"base_url":           w.llmString("base_url"),
 		"thinking_format":    w.llmString("thinking_format"),
@@ -148,6 +175,55 @@ func (w *webAPI) handleState(rw http.ResponseWriter, r *http.Request) {
 		"audit_enabled":      w.audit != nil && w.audit.Enabled(),
 		"now":                time.Now().Format(time.RFC3339),
 	})
+}
+
+// modelState 读取当前模型表状态；服务未装载时返回空列表，首屏不因此报错。
+func (w *webAPI) modelState() ([]string, string, string) {
+	if w.k == nil {
+		return nil, "", ""
+	}
+	mm, err := kernel.Use[api.ModelManager](w.k, "modelManager")
+	if err != nil {
+		return nil, "", ""
+	}
+	return mm.Names(), mm.ActiveName(), mm.AuxName()
+}
+
+// handleModels GET → 具名模型列表与当前主/辅模型。
+func (w *webAPI) handleModels(rw http.ResponseWriter, _ *http.Request) {
+	names, active, aux := w.modelState()
+	writeJSON(rw, map[string]any{"models": names, "active": active, "aux": aux})
+}
+
+// handleModelUse POST → 切换主模型或辅助模型，下一次请求立即生效。
+func (w *webAPI) handleModelUse(rw http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+		Aux  bool   `json:"aux"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(rw, http.StatusBadRequest, "请求体不是合法 JSON")
+		return
+	}
+	if req.Name == "" {
+		httpError(rw, http.StatusBadRequest, "缺少 name")
+		return
+	}
+	mm, err := kernel.Use[api.ModelManager](w.k, "modelManager")
+	if err != nil {
+		httpError(rw, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	if req.Aux {
+		err = mm.SetAux(req.Name)
+	} else {
+		err = mm.Use(req.Name)
+	}
+	if err != nil {
+		httpError(rw, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(rw, map[string]any{"ok": true, "active": mm.ActiveName(), "aux": mm.AuxName()})
 }
 
 func (w *webAPI) llmString(key string) string {
@@ -185,6 +261,19 @@ func (w *webAPI) toolNames() []string {
 
 // handleSessions GET → 会话摘要列表（新→旧）。
 func (w *webAPI) handleSessions(rw http.ResponseWriter, r *http.Request) {
+	// 带 q 时走全文检索：侧栏搜索框与「历史回看」共用这一个入口。
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		hits, err := w.store.Search(q, 50)
+		if err != nil {
+			httpError(rw, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if hits == nil {
+			hits = []api.SessionHit{}
+		}
+		writeJSON(rw, map[string]any{"query": q, "hits": hits})
+		return
+	}
 	metas, err := w.store.ListMeta()
 	if err != nil {
 		httpError(rw, http.StatusInternalServerError, err.Error())
@@ -248,9 +337,10 @@ func (w *webAPI) handleSessionDelete(rw http.ResponseWriter, r *http.Request) {
 // handleChat POST {prompt, session_id, run_id} → SSE。
 func (w *webAPI) handleChat(rw http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Prompt    string `json:"prompt"`
-		SessionID string `json:"session_id"`
-		RunID     string `json:"run_id"`
+		Prompt    string   `json:"prompt"`
+		SessionID string   `json:"session_id"`
+		RunID     string   `json:"run_id"`
+		Images    []string `json:"images"` // 上传接口返回的本地路径
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 	if err == nil {
@@ -293,11 +383,40 @@ func (w *webAPI) handleChat(rw http.ResponseWriter, r *http.Request) {
 
 	send("start", map[string]any{"session_id": req.SessionID, "run_id": req.RunID})
 
-	_, runErr := w.loop.RunSession(ctx, req.SessionID, req.Prompt,
+	// 附件只认上传目录里的文件：不接受前端直接指定任意本地路径，
+	// 否则「让模型看一张图」就变成了「让模型读你磁盘上的任何文件」。
+	parts := make([]api.ContentPart, 0, len(req.Images))
+	ignored := 0
+	dup := map[string]bool{}
+	for _, p := range req.Images {
+		if !w.insideUploads(p) {
+			log.Printf("忽略非上传目录的附件: %s", p)
+			ignored++
+			continue
+		}
+		// 同一张图重复给出时只留一份：每多一份就是几百上千 token 的重复账单，
+		// 而模型看到的其实是同一个像素。
+		if dup[p] {
+			continue
+		}
+		dup[p] = true
+		parts = append(parts, api.ContentPart{Type: "image", Path: p})
+	}
+	// 被丢掉的部分必须说出来：用户以为图发出去了，模型其实没见过，
+	// 接下来它会照着「你没有附图」的样子回答，用户只会觉得模型瞎了。
+	if ignored > 0 {
+		send("notice", map[string]any{
+			"text": fmt.Sprintf("%d 个附件不在上传目录，已忽略；请重新用附件按钮上传", ignored),
+		})
+	}
+
+	_, runErr := w.loop.RunWithParts(ctx, req.SessionID, req.Prompt, parts,
 		func(delta string) { send("delta", map[string]string{"text": delta}) },
 		func(ev api.Event) { send(string(ev.Kind), ev) },
 	)
 	if runErr != nil {
+		// 服务端必须留痕：前端只显示一行错误，排查时得能从日志看到完整原因。
+		log.Printf("chat 失败 session=%s: %v", req.SessionID, runErr)
 		if ctx.Err() != nil {
 			send("stopped", map[string]string{"message": "已被用户停止"})
 		} else {
@@ -530,17 +649,29 @@ func (w *webAPI) handleAudit(rw http.ResponseWriter, r *http.Request) {
 
 // permName / permLabel 当前权限档位，供首屏与状态栏显示。
 func (w *webAPI) permName() string {
+	if w.perm != nil {
+		return w.perm.Mode()
+	}
 	if w.guard == nil {
 		return "standard"
 	}
 	return w.guard.Mode().String()
 }
 
-func (w *webAPI) permLabel() string {
-	if w.guard == nil {
-		return "标准"
+func (w *webAPI) permLabel() string { return permLabelOf(w.permName()) }
+
+// permLabelOf 档位名 → 中文标签。计划档的底层权限是只读，
+// 标签必须单独给，否则界面会把「计划」显示成「只读」。
+func permLabelOf(mode string) string {
+	switch mode {
+	case "read_only":
+		return "只读"
+	case "full":
+		return "完全权限"
+	case "plan":
+		return "计划"
 	}
-	return w.guard.Mode().Label()
+	return "标准"
 }
 
 // handlePermissionGet GET → 当前档位与可选项。
@@ -552,6 +683,7 @@ func (w *webAPI) handlePermissionGet(rw http.ResponseWriter, _ *http.Request) {
 			{"mode": "read_only", "label": "只读", "desc": "仅读取与网络访问，不执行命令、不改文件"},
 			{"mode": "standard", "label": "标准", "desc": "可读写文件与执行命令，破坏性命令仍被拦截"},
 			{"mode": "full", "label": "完全权限", "desc": "破坏性命令放行（灾难性命令仍然拦截）"},
+			{"mode": "plan", "label": "计划", "desc": "只读 + 先出方案，等确认后再动手"},
 		},
 	})
 }
@@ -573,6 +705,15 @@ func (w *webAPI) handlePermissionSet(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mode, _ := req["mode"].(string)
+	if w.perm != nil {
+		if err := w.perm.SetMode(mode); err != nil {
+			httpError(rw, http.StatusBadRequest, err.Error())
+			return
+		}
+		cur := w.perm.Mode()
+		writeJSON(rw, map[string]any{"mode": cur, "label": permLabelOf(cur)})
+		return
+	}
 	p, err := tools.ParsePerm(mode)
 	if err != nil {
 		httpError(rw, http.StatusBadRequest, err.Error())

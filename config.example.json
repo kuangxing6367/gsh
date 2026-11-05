@@ -6,11 +6,22 @@
       "workspace": ".",
       "workspace_restrict": true,
       "shell": "auto",
+      "tool_timeout_seconds": 60,
+      "parallel_tools": true,
+      "parallel_limit": 4,
       "skills": {
         "dir": "./skills"
       },
       "enabled": [],
       "disabled": [],
+      "websearch": {
+        "provider": "duckduckgo",
+        "proxy": "",
+        "endpoint": "",
+        "api_key": "",
+        "max_results": 5,
+        "timeout_seconds": 20
+      },
       "remote": {
         "ssh_bin": "ssh",
         "nodes": {
@@ -20,15 +31,65 @@
         }
       }
     },
-    "llm": {
+    "memory": {
+      "enabled": true,
+      "path": ".gsh/memory/MEMORY.md"
+    },
+    "hooks": {
+      "before_tool": [
+        {"match": "^bash$", "command": "echo 检查通过", "timeout_seconds": 5}
+      ],
+      "after_tool": []
+    },
+    "codeindex": {
+      "enabled": true
+    },
+    "subagent": {
+      "max_turns": 12
+    },
+    "mcp": {
+      "servers": []
+    },    "llm": {
       "provider": "openai",
       "base_url": "https://api.deepseek.com",
       "model": "deepseek-chat",
       "api_key": "SK_YOUR_KEY_HERE",
-      "thinking_format": "none"
+      "thinking_format": "none",
+      "timeout_seconds": 120,
+      "context_window": 0,
+      "active": "",
+      "aux": "",
+      "models": {},
+      "params": {
+        "temperature": 0.7,
+        "top_p": 1,
+        "max_tokens": 4096,
+        "stop": []
+      },
+      "thinking": {
+        "enabled": false,
+        "style": "auto",
+        "effort": "medium",
+        "budget_tokens": 0
+      },
+      "retry": {
+        "max": 2,
+        "base_ms": 800
+      }
+    },
+    "prompt": {
+      "active": "",
+      "personas": {},
+      "system": ""
     },
     "session": {
-      "dir": ".gsh/sessions"
+      "dir": ".gsh/session/sessions",
+      "compact_enabled": true,
+      "max_chars": 24000,
+      "max_tokens": 0,
+      "token_ratio": 0.75,
+      "keep_turns": 20,
+      "hard_cap": 400
     },
     "web": {
       "addr": ":8934"

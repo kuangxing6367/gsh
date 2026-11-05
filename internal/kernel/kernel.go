@@ -1,5 +1,5 @@
 // Package kernel 是 gsh 的微内核：插件装载、服务注册、事件总线。
-// 对应 DSH 的 Cordis —— "Everything is a plugin"。
+// 一切能力都以插件形式挂载，内核只负责装载、服务注册与事件分发。
 package kernel
 
 import (
@@ -47,6 +47,22 @@ func (c *Ctx) Config() map[string]any {
 // DataDir 返回本插件的数据目录（已确保存在）。会话文件等落盘内容放这里。
 func (c *Ctx) DataDir() string { return c.k.dataDirFor(c.name) }
 
+// BaseDir 返回程序目录：配置里的相对路径（workspace / skills）相对它解析。
+// 未设置时退回当前工作目录，保持旧行为。
+func (c *Ctx) BaseDir() string {
+	if c.k.cfg != nil && c.k.cfg.BaseDir != "" {
+		return c.k.cfg.BaseDir
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
+}
+
+// DataDirFor 返回某插件的数据目录（宿主侧脚本、归档等需要定位数据的场景用）。
+func (k *Kernel) DataDirFor(plugin string) string { return k.dataDirFor(plugin) }
+
 func (k *Kernel) dataDirFor(plugin string) string {
 	root := k.cfg.DataDir
 	if root == "" {
@@ -57,6 +73,20 @@ func (k *Kernel) dataDirFor(plugin string) string {
 		panic(fmt.Sprintf("kernel: mkdir data dir for %s: %v", plugin, err))
 	}
 	return dir
+}
+
+// SetRuntime 发布一个运行时变量，供后续装载的插件读取。
+// 用途：tools 插件把实际解析出的工作区路径、权限档位交给提示词等消费方，
+// 避免多个插件各自按相对路径重算一遍而得到不同结果。
+func (c *Ctx) SetRuntime(key string, v any) { c.k.SetValue(key, v) }
+
+// Runtime 读取任意类型的运行时变量，缺失返回 nil。
+func (c *Ctx) Runtime(key string) any { return c.k.Value(key) }
+
+// RuntimeString 读取字符串型运行时变量，缺失或非字符串返回空串。
+func (c *Ctx) RuntimeString(key string) string {
+	s, _ := c.k.Value(key).(string)
+	return s
 }
 
 // Emit 广播事件。订阅者 panic 不影响发布方（recover 隔离）。
@@ -120,6 +150,9 @@ type Config struct {
 	DataDir string                    `json:"data_dir"`    // 数据根目录
 	// Path 配置文件的绝对路径（不参与序列化）。设置面板据此写回。
 	Path string `json:"-"`
+	// BaseDir 程序目录（不参与序列化）。配置里的相对路径（workspace / skills）
+	// 一律相对它解析，避免随启动时的当前工作目录漂移。
+	BaseDir string `json:"-"`
 }
 
 func (k *Kernel) pluginConfig(name string) map[string]any {

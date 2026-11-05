@@ -171,6 +171,7 @@ type ListSkillsTool struct{ reg *SkillRegistry }
 func (t *ListSkillsTool) Spec() api.ToolSpec {
 	return api.ToolSpec{
 		Name:        "list_skills",
+		ReadOnly:    true,
 		Description: "List available skills (name + one-line description). Skills are on-demand playbooks; call use_skill to read the full instructions before doing a task that matches one.",
 		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
 	}
@@ -203,6 +204,7 @@ type UseSkillTool struct{ reg *SkillRegistry }
 func (t *UseSkillTool) Spec() api.ToolSpec {
 	return api.ToolSpec{
 		Name:        "use_skill",
+		ReadOnly:    true,
 		Description: "Load the full instructions of a skill by name (see list_skills). Returns the SKILL.md body plus its directory, so you can read bundled files or run its scripts.",
 		Parameters: map[string]any{
 			"type":       "object",
@@ -238,8 +240,6 @@ func (t *UseSkillTool) Run(_ context.Context, argsJSON string) (string, error) {
 	if _, _, rest, ok := splitFrontmatter(body); ok {
 		body = rest
 	}
-	if len(body) > maxToolOutput {
-		body = body[:maxToolOutput] + "\n...[truncated]"
-	}
+	body = clipAt(body, maxToolOutput)
 	return fmt.Sprintf("[skill: %s]\n目录: %s\n\n%s", sk.Name, sk.Dir, strings.TrimSpace(body)), nil
 }

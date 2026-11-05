@@ -13,12 +13,29 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"gsh/internal/api"
 )
 
 // maxToolOutput 工具输出上限（超长截断，避免撑爆模型上下文）。
 const maxToolOutput = 60_000
+
+// clipAt 按字节上限截断，但切口必须落在字符边界上。
+//
+// 直接 s[:max] 会把多字节字符切成半个：中文输出里最后一个字变成替换符，
+// 更糟的是这串非法字节还会被送进 JSON 编码器，整个字段的可读性都受影响。
+// 上限按字节算是为了控上下文成本，回退几个字节不影响这个目的。
+func clipAt(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "\n...[truncated]"
+}
 
 // pickShell 按候选链解析出可用的 shell（每个 BashTool 实例只解析一次）。
 // 一次解析会逐个跑探针，结果连同失败原因一起缓存下来供诊断使用。
@@ -271,12 +288,7 @@ func (t *BashTool) execDegraded(ctx context.Context, command string, shErr error
 }
 
 // clip 截断过长输出，避免撑爆上下文。
-func (t *BashTool) clip(s string) string {
-	if len(s) > maxToolOutput {
-		return s[:maxToolOutput] + "\n...[truncated]"
-	}
-	return s
-}
+func (t *BashTool) clip(s string) string { return clipAt(s, maxToolOutput) }
 
 // runRemote 分派到对应的后端。
 func (t *BashTool) runRemote(ctx context.Context, command string, spec NodeSpec) (string, error) {
@@ -308,10 +320,7 @@ func (t *BashTool) runViaSSH(ctx context.Context, command string, spec NodeSpec)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	runErr := cmd.Run()
-	out := normalizeOutput(buf.String())
-	if len(out) > maxToolOutput {
-		out = out[:maxToolOutput] + "\n...[truncated]"
-	}
+	out := clipAt(normalizeOutput(buf.String()), maxToolOutput)
 	if runErr != nil {
 		return out, fmt.Errorf("remote exec on %s@%s failed: %w", spec.User, spec.Host, runErr)
 	}
@@ -344,10 +353,7 @@ func (t *BashTool) runViaExec(ctx context.Context, command string, spec NodeSpec
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	runErr := cmd.Run()
-	out := normalizeOutput(buf.String())
-	if len(out) > maxToolOutput {
-		out = out[:maxToolOutput] + "\n...[truncated]"
-	}
+	out := clipAt(normalizeOutput(buf.String()), maxToolOutput)
 	if runErr != nil {
 		return out, fmt.Errorf("remote exec via %s failed: %w", spec.Exec, runErr)
 	}
@@ -363,6 +369,7 @@ type ReadFileTool struct{ ws *Workspace }
 func (t *ReadFileTool) Spec() api.ToolSpec {
 	return api.ToolSpec{
 		Name:        "read_file",
+		ReadOnly:    true,
 		Description: "Read a text file. Optional offset(1-based)/limit lines.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -568,6 +575,7 @@ type GlobTool struct{ ws *Workspace }
 func (t *GlobTool) Spec() api.ToolSpec {
 	return api.ToolSpec{
 		Name:        "glob",
+		ReadOnly:    true,
 		Description: "Find files by glob pattern, e.g. src/**/*.go. Returns paths sorted by mtime (newest first).",
 		Parameters: map[string]any{
 			"type": "object",
@@ -615,6 +623,7 @@ type GrepTool struct{ ws *Workspace }
 func (t *GrepTool) Spec() api.ToolSpec {
 	return api.ToolSpec{
 		Name:        "grep",
+		ReadOnly:    true,
 		Description: "Search a literal substring inside files under a directory (recursive, skips .git and binaries). Returns file:line:text (max 200 hits).",
 		Parameters: map[string]any{
 			"type": "object",

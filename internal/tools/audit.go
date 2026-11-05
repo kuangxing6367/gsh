@@ -40,7 +40,7 @@ func NewAuditLog(dataDir string, enabled bool) (*AuditLog, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("audit: mkdir %s: %w", dir, err)
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "audit.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, "audit.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("audit: open: %w", err)
 	}
@@ -62,18 +62,18 @@ func (a *AuditLog) Enabled() bool { return a != nil && a.enabled }
 
 // AuditEntry 一条审计记录。
 type AuditEntry struct {
-	TS        string `json:"ts"`                   // RFC3339 时间戳
-	Session   string `json:"session"`              // 会话 id（无会话为 "-"）
-	Tool      string `json:"tool"`                 // 工具名
-	Args      string `json:"args"`                 // 脱敏后的参数 JSON（保留结构）
-	Node      string `json:"node,omitempty"`       // 远程节点名（本地为空）
-	Action    string `json:"action"`               // denied | blocked | execute
-	Blocked   string `json:"blocked,omitempty"`    // 拦截原因（guard 拦 / 工具不存在）
-	Perm      string `json:"perm"`                 // 执行时权限档位
-	Ok        bool   `json:"ok"`                   // 执行是否成功
-	Err       string `json:"err,omitempty"`        // 错误信息（截断）
-	ResultLen int    `json:"result_len"`           // 结果内容长度（不记内容）
-	DurMs     int64  `json:"dur_ms"`               // 执行耗时（毫秒）
+	TS        string `json:"ts"`                // RFC3339 时间戳
+	Session   string `json:"session"`           // 会话 id（无会话为 "-"）
+	Tool      string `json:"tool"`              // 工具名
+	Args      string `json:"args"`              // 脱敏后的参数 JSON（保留结构）
+	Node      string `json:"node,omitempty"`    // 远程节点名（本地为空）
+	Action    string `json:"action"`            // denied | blocked | execute
+	Blocked   string `json:"blocked,omitempty"` // 拦截原因（guard 拦 / 工具不存在）
+	Perm      string `json:"perm"`              // 执行时权限档位
+	Ok        bool   `json:"ok"`                // 执行是否成功
+	Err       string `json:"err,omitempty"`     // 错误信息（截断）
+	ResultLen int    `json:"result_len"`        // 结果内容长度（不记内容）
+	DurMs     int64  `json:"dur_ms"`            // 执行耗时（毫秒）
 }
 
 // Record 写一条审计记录。

@@ -39,9 +39,9 @@ func newApproveReg(t *testing.T, perm Perm) (*registry, *int) {
 	}
 	ran := 0
 	reg := &registry{
-		tools:  map[string]api.Tool{"bash": recorderTool{name: "bash", ran: &ran}},
-		guard:  NewGuard(perm),
-		audit:  audit,
+		tools: map[string]api.Tool{"bash": recorderTool{name: "bash", ran: &ran}},
+		guard: NewGuard(perm),
+		audit: audit,
 	}
 	return reg, &ran
 }

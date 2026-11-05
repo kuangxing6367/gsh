@@ -45,21 +45,21 @@ func RunREPL(ctx context.Context, exec func(ctx context.Context, input string, o
 		case "/quit", "/exit", "/q":
 			return nil
 		}
-		printAnswer(exec, ctx, line)
+		_ = printAnswer(exec, ctx, line)
 	}
 	return nil
 }
 
 // RunHeadless 一次性执行模式：单条输入 → 回复 → 退出。
+// 执行失败时返回错误，由 main 写日志并以非 0 退出码结束。
 func RunHeadless(ctx context.Context, input string, exec func(ctx context.Context, input string, onDelta api.StreamDelta) (string, error)) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
-	printAnswer(exec, ctx, input)
-	return nil
+	return printAnswer(exec, ctx, input)
 }
 
-// printAnswer 执行并输出：流式 delta 已打过的内容不重复打印。
-func printAnswer(exec func(ctx context.Context, string string, onDelta api.StreamDelta) (string, error), ctx context.Context, line string) {
+// printAnswer 执行并输出：流式 delta 已打过的内容不重复打印。返回执行错误。
+func printAnswer(exec func(ctx context.Context, string string, onDelta api.StreamDelta) (string, error), ctx context.Context, line string) error {
 	printed := false
 	out, err := exec(ctx, line, func(t string) {
 		if !printed {
@@ -70,11 +70,12 @@ func printAnswer(exec func(ctx context.Context, string string, onDelta api.Strea
 	fmt.Println()
 	if err != nil {
 		fmt.Printf("[error] %v\n", err)
-		return
+		return err
 	}
 	if out != "" && !printed {
 		fmt.Println(out)
 	}
+	return nil
 }
 
 // PrintTrace 把 loop 的事件流打到终端（工具调用/结果）。

@@ -70,11 +70,16 @@ func fileDiff(oldText, newText string, label string) string {
 		for _, ln := range blk.lines {
 			switch ln.op {
 			case " ":
-				oldNo++; newNo++; oldCnt++; newCnt++
+				oldNo++
+				newNo++
+				oldCnt++
+				newCnt++
 			case "-":
-				oldNo++; oldCnt++
+				oldNo++
+				oldCnt++
 			case "+":
-				newNo++; newCnt++
+				newNo++
+				newCnt++
 			}
 		}
 		fmt.Fprintf(&bld, "@@ -%d,%d +%d,%d @@\n", blkOldStart, oldCnt, blkNewStart, newCnt)
@@ -142,7 +147,8 @@ func backtrack(a, b []string, t [][]int) []diffOp {
 	for i < len(a) && j < len(b) {
 		if a[i] == b[j] {
 			ops = append(ops, diffOp{kind: "eq", text: a[i]})
-			i++; j++
+			i++
+			j++
 		} else if t[i+1][j] >= t[i][j+1] {
 			ops = append(ops, diffOp{kind: "del", text: a[i]})
 			i++

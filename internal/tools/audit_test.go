@@ -42,7 +42,7 @@ func TestRedactArgs(t *testing.T) {
 
 func TestRedactSecretsInCommand(t *testing.T) {
 	cmd := `export TOKEN=supersecret123 && echo hi`
-	out := redactArgs(`{"command":` + "`"+cmd+"`" + `}`)
+	out := redactArgs(`{"command":` + "`" + cmd + "`" + `}`)
 	if strings.Contains(out, "supersecret123") {
 		t.Fatal("token=... in command not redacted")
 	}

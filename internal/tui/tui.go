@@ -34,7 +34,7 @@ import (
 	"gsh/internal/ui"
 )
 
-// opencode 视觉 token（取自 dev 分支截图采样）。
+// 视觉 token（按实际界面截图采样）。
 var (
 	cBg     = lipgloss.Color("#0a0a0a") // 画布
 	cElem   = lipgloss.Color("#141414") // 标题条 / 用户块
@@ -43,14 +43,14 @@ var (
 	cMuted  = lipgloss.Color("#909090") // 次级
 	cDim    = lipgloss.Color("#5a5a5a") // 弱化（符号/摘要）
 	cBorder = lipgloss.Color("#3a3a3a") // 边框（比截图略亮，避免 256 色被量化成纯黑）
-	cAccent = lipgloss.Color("#5898f0") // 强调蓝（opencode 截图主色）
+	cAccent = lipgloss.Color("#5898f0") // 强调蓝
 	cRed    = lipgloss.Color("#ff5555")
 
-	styleText   = lipgloss.NewStyle().Foreground(cText)
-	styleMuted  = lipgloss.NewStyle().Foreground(cMuted)
-	styleDim    = lipgloss.NewStyle().Foreground(cDim)
-	styleAccent = lipgloss.NewStyle().Foreground(cAccent)
-	styleErr    = lipgloss.NewStyle().Foreground(cRed)
+	styleText    = lipgloss.NewStyle().Foreground(cText)
+	styleMuted   = lipgloss.NewStyle().Foreground(cMuted)
+	styleDim     = lipgloss.NewStyle().Foreground(cDim)
+	styleAccent  = lipgloss.NewStyle().Foreground(cAccent)
+	styleErr     = lipgloss.NewStyle().Foreground(cRed)
 	styleDiffAdd = lipgloss.NewStyle().Foreground(lipgloss.Color("#6fce8c"))
 	styleDiffDel = lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6b6b"))
 )
@@ -58,9 +58,11 @@ var (
 type roleType string
 
 const (
-	roleUser roleType = "user"
-	roleAsst roleType = "assistant"
-	roleTool roleType = "tool"
+	roleUser   roleType = "user"
+	roleAsst   roleType = "assistant"
+	roleTool   roleType = "tool"
+	roleReason roleType = "reason" // 折叠的思考过程
+	roleNote   roleType = "note"   // 用量、上下文压缩等单行提示
 )
 
 // displayMsg 渲染层的一条消息。
@@ -78,48 +80,57 @@ type displayMsg struct {
 
 // streamEvent 从 loop 的流式 goroutine 回流到 bubbletea 的事件。
 type streamEvent struct {
-	kind string // delta | tool_call | tool_result | final | done | error
+	kind string // delta | tool_call | tool_result | reason | note | todo | final | done | error
 	id   string
 	name string
 	text string
 	data string
 	err  bool
+	todo []api.TodoItem
 }
 
 // Model 是 bubbletea 的根模型。
 type Model struct {
-	k        *kernel.Kernel
-	loop     api.Loop
-	sessID   string
-	title    string
-	model    string
-	provider string
-	mode     string // 权限档位的中文标签
-	width    int
-	height   int
-	ready    bool
-	messages []displayMsg
-	vp       viewport.Model
-	ta       textarea.Model
-	running  bool
-	cancel   context.CancelFunc
-	streamCh chan streamEvent
+	k          *kernel.Kernel
+	loop       api.Loop
+	sessID     string
+	title      string
+	model      string
+	provider   string
+	mode       string // 权限档位的中文标签
+	width      int
+	height     int
+	ready      bool
+	messages   []displayMsg
+	vp         viewport.Model
+	ta         textarea.Model
+	running    bool
+	cancel     context.CancelFunc
+	streamCh   chan streamEvent
 	errStr     string
 	exportPath string // 最近一次 /export 导出的 Markdown 路径（非空时在标题条下提示）
 
 	// 浮层与命令
-	overlay   string // ""=无, "help", "sessions"
-	sessList  []api.SessionMeta
-	sessIdx   int
+	overlay  string // ""=无, "help", "sessions"
+	sessList []api.SessionMeta
+	sessIdx  int
 	// 计时与计数（顶栏实时显示，不编 token/cost）
 	runStart time.Time
 	lastDur  time.Duration
 
 	// 交互式权限确认：标准档位下高风险工具执行前先问用户。
-	permCh chan *permRequest // 审批器 → Model
-	perm   *permRequest      // 当前待确认请求（nil=无）
-	pendingResume string    // 非空时，首帧尺寸就绪后定位并回放该会话
-	readOnly     bool      // 只读浏览模式：可滚动查看历史，禁止发送新消息
+	permCh        chan *permRequest // 审批器 → Model
+	perm          *permRequest      // 当前待确认请求（nil=无）
+	pendingResume string            // 非空时，首帧尺寸就绪后定位并回放该会话
+	readOnly      bool              // 只读浏览模式：可滚动查看历史，禁止发送新消息
+
+	// detail 展示档：0 简洁 / 1 标准 / 2 详细 / 3 完全。
+	// 过程信息（工具参数、结果正文、思考全文）默认收起，Ctrl+T 循环切换。
+	detail int
+	// todo 当前任务的计划清单，由 todo 事件刷新。
+	todo []api.TodoItem
+	// pendingImages 待随下一条消息发出的图片路径（/image 添加）。
+	pendingImages []string
 }
 
 // permRequest 一次待确认的工具调用（审批器 → Model 的跨 goroutine 消息）。
@@ -333,6 +344,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Type == tea.KeyCtrlE:
 			m.exportSession()
 			return m, nil
+		case msg.Type == tea.KeyTab && !m.readOnly && !m.running:
+			m.cyclePerm()
+			return m, nil
+		case msg.Type == tea.KeyCtrlT:
+			m.cycleDetail()
+			m.renderContent()
+			return m, nil
 		case m.readOnly:
 			// 只读浏览：除 ctrl+c / 浮层 / Ctrl+P 外，忽略一切输入（含发送与编辑）。
 			return m, nil
@@ -400,7 +418,12 @@ func (m *Model) send() {
 	m.cancel = cancel
 	go func() {
 		defer func() { m.streamCh <- streamEvent{kind: "done"} }()
-		_, _ = m.loop.RunSession(ctx, m.sessID, text,
+		parts := make([]api.ContentPart, 0, len(m.pendingImages))
+		for _, p := range m.pendingImages {
+			parts = append(parts, api.ContentPart{Type: "image", Path: p})
+		}
+		m.pendingImages = nil
+		_, _ = m.loop.RunWithParts(ctx, m.sessID, text, parts,
 			func(delta string) {
 				m.streamCh <- streamEvent{kind: "delta", text: delta}
 			},
@@ -410,6 +433,24 @@ func (m *Model) send() {
 					m.streamCh <- streamEvent{kind: "tool_call", id: ev.ID, name: ev.Name, text: ev.Args}
 				case api.EventToolResult:
 					m.streamCh <- streamEvent{kind: "tool_result", id: ev.ID, name: ev.Name, data: ev.Data, err: ev.Err}
+				case api.EventReason:
+					m.streamCh <- streamEvent{kind: "reason", text: ev.Data}
+				case api.EventUsage:
+					if ev.Usage != nil {
+						tag := ""
+						if ev.Usage.Estimated {
+							tag = "（估算）"
+						}
+						m.streamCh <- streamEvent{
+							kind: "note",
+							text: fmt.Sprintf("token: 输入 %d · 输出 %d · 合计 %d%s",
+								ev.Usage.PromptTokens, ev.Usage.CompletionTokens, ev.Usage.TotalTokens, tag),
+						}
+					}
+				case api.EventCompacted:
+					m.streamCh <- streamEvent{kind: "note", text: ev.Data}
+				case api.EventTodo:
+					m.streamCh <- streamEvent{kind: "todo", todo: ev.Todo}
 				case api.EventFinal:
 					m.streamCh <- streamEvent{kind: "final", text: ev.Data}
 				}
@@ -431,6 +472,27 @@ func (m *Model) handleStream(se streamEvent) {
 		if n := len(m.messages); n > 0 && m.messages[n-1].role == roleAsst && m.messages[n-1].text == "" {
 			m.messages[n-1].text = se.text
 		}
+	case "reason":
+		// 本轮的思考增量合并进同一条折叠行；跨过用户消息就另起一行。
+		idx := -1
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			if m.messages[i].role == roleUser || m.messages[i].role == roleAsst || m.messages[i].role == roleTool {
+				break
+			}
+			if m.messages[i].role == roleReason {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			m.messages = append(m.messages, displayMsg{role: roleReason, text: se.text})
+		} else {
+			m.messages[idx].text += se.text
+		}
+	case "note":
+		m.messages = append(m.messages, displayMsg{role: roleNote, text: se.text})
+	case "todo":
+		m.todo = se.todo
 	case "tool_call":
 		m.messages = append(m.messages, displayMsg{
 			role:  roleTool,
@@ -439,36 +501,36 @@ func (m *Model) handleStream(se streamEvent) {
 			args:  argSummary(se.text),
 			state: "pending",
 		})
-		case "tool_result":
-			for i := range m.messages {
-				if m.messages[i].role == roleTool && m.messages[i].id == se.id {
-					if se.err {
-						m.messages[i].state = "error"
-					} else {
-						m.messages[i].state = "done"
-					}
-					rest, diff := tools.ExtractDiff(se.data)
-					m.messages[i].diff = diff
-					m.messages[i].detail = rest
-					m.messages[i].note = toolNote(se.err, diff, rest)
-					break
+	case "tool_result":
+		for i := range m.messages {
+			if m.messages[i].role == roleTool && m.messages[i].id == se.id {
+				if se.err {
+					m.messages[i].state = "error"
+				} else {
+					m.messages[i].state = "done"
 				}
+				rest, diff := tools.ExtractDiff(se.data)
+				m.messages[i].diff = diff
+				m.messages[i].detail = rest
+				m.messages[i].note = toolNote(se.err, diff, rest)
+				break
 			}
-		case "done":
-			m.running = false
-			if !m.runStart.IsZero() {
-				m.lastDur = time.Since(m.runStart)
-				m.runStart = time.Time{}
-			}
-			m.ta.Focus()
-		case "error":
-			m.errStr = se.text
-			m.running = false
-			if !m.runStart.IsZero() {
-				m.lastDur = time.Since(m.runStart)
-				m.runStart = time.Time{}
-			}
-			m.ta.Focus()
+		}
+	case "done":
+		m.running = false
+		if !m.runStart.IsZero() {
+			m.lastDur = time.Since(m.runStart)
+			m.runStart = time.Time{}
+		}
+		m.ta.Focus()
+	case "error":
+		m.errStr = se.text
+		m.running = false
+		if !m.runStart.IsZero() {
+			m.lastDur = time.Since(m.runStart)
+			m.runStart = time.Time{}
+		}
+		m.ta.Focus()
 	}
 }
 
@@ -491,7 +553,15 @@ func (m *Model) renderContent() {
 			}
 			b.WriteString("\n")
 		case roleTool:
-			b.WriteString(renderToolLine(dm, w))
+			b.WriteString(renderToolLine(dm, w, m.detail))
+			b.WriteString("\n")
+		case roleReason:
+			if line := renderReasonLine(dm.text, w, m.detail); line != "" {
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+		case roleNote:
+			b.WriteString("  " + styleDim.Render(dm.text))
 			b.WriteString("\n")
 		}
 	}
@@ -515,14 +585,46 @@ func (m *Model) renderUserBlock(text string, w int) string {
 		Render(text)
 }
 
+// renderReasonLine 思考过程折叠成一行预览，避免逐字刷屏。
+// text 存的是完整思考内容，这里只取开头一小段 + 总字数。
+// renderReasonLine 思考过程。简洁档不显示，标准档折叠成一行，详细及以上显示全文。
+func renderReasonLine(text string, w, detail int) string {
+	if detail <= 0 {
+		return ""
+	}
+	flat := strings.Join(strings.Fields(text), " ")
+	total := len([]rune(flat))
+	label := "  " + styleDim.Render("◇ 思考") + " "
+	if detail >= 2 {
+		body := lipgloss.NewStyle().
+			Border(lipgloss.Border{Left: "┃"}, false, false, false, true).
+			BorderForeground(cDim).
+			Padding(0, 1).
+			Width(maxInt(w-6, 10)).
+			Render(styleMuted.Render(wrapText(flat, w-8)))
+		return label + styleDim.Render(fmt.Sprintf("(%d 字)", total)) + "\n" + body
+	}
+	const preview = 72
+	shown := flat
+	if r := []rune(flat); len(r) > preview {
+		shown = string(r[:preview]) + "…"
+	}
+	maxLine := maxInt(w-10, 20)
+	if r := []rune(shown); len(r) > maxLine {
+		shown = string(r[:maxLine]) + "…"
+	}
+	return label + styleMuted.Render(shown) + " " + styleDim.Render(fmt.Sprintf("(%d 字)", total))
+}
+
 // renderToolLine 工具行：`* Tool args` / 读类工具用 `→`，下方渲染 diff 与输出详情。
-func renderToolLine(dm displayMsg, w int) string {
+func renderToolLine(dm displayMsg, w, detail int) string {
 	sym := "*"
 	if isReadTool(dm.name) {
 		sym = "→"
 	}
 	line := "  " + styleDim.Render(sym) + " " + styleMuted.Render(dm.name)
-	if dm.args != "" {
+	// 简洁档只留工具名与结果摘要，参数与正文全部收起。
+	if dm.args != "" && detail > 0 {
 		line += " " + styleDim.Render(dm.args)
 	}
 	if dm.state == "error" {
@@ -531,13 +633,16 @@ func renderToolLine(dm displayMsg, w int) string {
 		line += " " + styleDim.Render(dm.note)
 	}
 
+	if detail <= 0 {
+		return line
+	}
 	var extra strings.Builder
 	if dm.diff != "" {
 		extra.WriteString("\n")
 		extra.WriteString(renderDiffBlock(dm.diff, w))
 	}
 	if dm.detail != "" {
-		if d := renderToolDetail(dm.detail, w); d != "" {
+		if d := renderToolDetail(dm.detail, w, detail); d != "" {
 			extra.WriteString("\n")
 			extra.WriteString(d)
 		}
@@ -581,13 +686,17 @@ func renderDiffBlock(diff string, w int) string {
 }
 
 // renderToolDetail 工具输出详情（bash/grep/read 等）：暗色左条 + 折行，超长截断。
-func renderToolDetail(content string, w int) string {
+// renderToolDetail 工具结果正文。标准档截断 40 行，详细及以上全文。
+func renderToolDetail(content string, w, detail int) string {
 	content = strings.TrimRight(content, "\n")
 	if strings.TrimSpace(content) == "" {
 		return ""
 	}
 	lines := strings.Split(content, "\n")
-	const maxDetail = 40
+	maxDetail := 40
+	if detail >= 2 {
+		maxDetail = len(lines)
+	}
 	more := 0
 	if len(lines) > maxDetail {
 		more = len(lines) - maxDetail
@@ -684,7 +793,7 @@ func (m *Model) renderFooter(w int) string {
 		return badge + "\n" + box + "\n" + hint
 	}
 
-	// 用 ◆ 而不用 opencode 的 ✻：✻/✦ 在 Cascadia Mono、Consolas 都没有字形，会变豆腐块。
+	// 用 ◆ 而不用 ✻：✻/✦ 在 Cascadia Mono、Consolas 都没有字形，会变豆腐块。
 	badge := "  " + styleAccent.Render("◆") + " " + styleAccent.Render(m.mode) + styleMuted.Render(" · "+model)
 
 	inner := lipgloss.NewStyle().
@@ -703,6 +812,12 @@ func (m *Model) renderFooter(w int) string {
 	if m.provider != "" {
 		modeRow += "  " + styleDim.Render(m.provider)
 	}
+	if m.detail > 0 {
+		modeRow += "  " + styleDim.Render(detailLabel(m.detail))
+	}
+	if p := todoProgress(m.todo); p != "" {
+		modeRow += "  " + styleDim.Render(p)
+	}
 
 	leftHint := "enter 发送"
 	if m.running {
@@ -710,7 +825,7 @@ func (m *Model) renderFooter(w int) string {
 	}
 	hint := padStyled(
 		styleDim.Render("  "+leftHint),
-		styleDim.Render("shift+enter 换行   ctrl+c 退出  "),
+		styleDim.Render("tab 权限  ctrl+t 细节  ctrl+p 会话  ctrl+c 退出  "),
 		w,
 	)
 
@@ -751,6 +866,57 @@ func (m *Model) renderPermFooter(w int) string {
 
 // ---------- 浮层与命令 ----------
 
+// attachImage 把本地图片挂到待发送队列；不带参数时显示当前队列。
+// 图片按路径传下去、发送时才读取，所以这里只校验存在性。
+func (m *Model) attachImage(text string) {
+	args := strings.TrimSpace(strings.TrimPrefix(text, strings.Fields(text)[0]))
+	if args == "" {
+		if len(m.pendingImages) == 0 {
+			m.noteMsg("当前没有待发送的图片。用法：/image <路径>")
+			return
+		}
+		var names []string
+		for _, p := range m.pendingImages {
+			names = append(names, filepath.Base(p))
+		}
+		m.noteMsg("待发送图片：" + strings.Join(names, "、") + "（/image clear 清空）")
+		return
+	}
+	if args == "clear" {
+		m.pendingImages = nil
+		m.noteMsg("已清空待发送图片")
+		return
+	}
+	// 相对路径先按工作区解析：gsh 全局语义是「相对路径以工作区为基准」，
+	// 而进程 cwd 往往是程序安装目录。这里不走工作区就等于给用户两套坐标系。
+	// 工作区解析失败（越界或文件不在这里）才退回 cwd——用户可能想附一张
+	// 工作区之外的截图，那属于合理需求。
+	abs := ""
+	if k := kernel.Current; k != nil {
+		if ws, werr := kernel.Use[interface{ Resolve(string) (string, error) }](k, "workspace"); werr == nil {
+			if p, rerr := ws.Resolve(args); rerr == nil {
+				if st, serr := os.Stat(p); serr == nil && !st.IsDir() {
+					abs = p
+				}
+			}
+		}
+	}
+	if abs == "" {
+		p, err := filepath.Abs(args)
+		if err != nil {
+			m.errStr = "路径解析失败: " + err.Error()
+			return
+		}
+		abs = p
+	}
+	if st, serr := os.Stat(abs); serr != nil || st.IsDir() {
+		m.errStr = "图片不存在或不是文件: " + args
+		return
+	}
+	m.pendingImages = append(m.pendingImages, abs)
+	m.noteMsg(fmt.Sprintf("已加入图片 %s（共 %d 张，随下一条消息发送）", filepath.Base(abs), len(m.pendingImages)))
+}
+
 // runCommand 处理斜杠命令（输入以 / 开头，已在 send 里分流）。
 func (m *Model) runCommand(text string) {
 	cmd := strings.Fields(text)[0]
@@ -769,6 +935,22 @@ func (m *Model) runCommand(text string) {
 		}
 	case "/export", "/e":
 		m.exportSession()
+	case "/model", "/aux":
+		m.switchModel(text, cmd == "/aux")
+	case "/mode", "/perm":
+		m.switchPerm(text)
+	case "/detail", "/d":
+		m.switchDetail(text)
+	case "/tools":
+		m.showTools()
+	case "/memory", "/mem":
+		m.showMemory()
+	case "/history", "/h":
+		m.searchHistory(text)
+	case "/todo":
+		m.showTodo()
+	case "/image", "/img":
+		m.attachImage(text)
 	case "/new":
 		if m.readOnly {
 			m.errStr = "只读模式：先 /readonly 切回可编辑再 /new"
@@ -784,6 +966,216 @@ func (m *Model) runCommand(text string) {
 	default:
 		m.errStr = "未知命令：" + cmd + "（输入 /help 查看可用命令）"
 	}
+}
+
+// ---------- 运行期开关 ----------
+
+// cyclePerm Tab 循环切权限档：只读 → 标准 → 完全 → 只读。
+func (m *Model) cyclePerm() {
+	ps, err := kernel.Use[api.PermissionSwitch](m.k, "permission")
+	if err != nil || ps == nil {
+		m.errStr = "权限服务不可用"
+		return
+	}
+	// plan 排在最后：它是最「收」的一档，循环到它就该意识到下一步要出方案而非动手。
+	order := []string{"read_only", "standard", "full", "plan"}
+	cur := ps.Mode()
+	next := order[0]
+	for i, v := range order {
+		if v == cur {
+			next = order[(i+1)%len(order)]
+			break
+		}
+	}
+	if err := ps.SetMode(next); err != nil {
+		m.errStr = err.Error()
+		return
+	}
+	m.mode = permLabel(ps.Mode())
+	m.errStr = ""
+	m.renderContent()
+}
+
+// switchPerm 带参数时直接切档，不带参数列出可选档位。
+func (m *Model) switchPerm(text string) {
+	ps, err := kernel.Use[api.PermissionSwitch](m.k, "permission")
+	if err != nil || ps == nil {
+		m.errStr = "权限服务不可用"
+		return
+	}
+	parts := strings.Fields(text)
+	if len(parts) < 2 {
+		m.noteMsg("当前权限：" + permLabel(ps.Mode()) + "（tab 循环切换；/mode read_only|standard|full 直接指定）")
+		return
+	}
+	if err := ps.SetMode(parts[1]); err != nil {
+		m.errStr = err.Error()
+		return
+	}
+	m.mode = permLabel(ps.Mode())
+	m.noteMsg("权限已切到：" + m.mode)
+}
+
+// cycleDetail Ctrl+T 循环展示档：简洁 → 标准 → 详细 → 完全。
+func (m *Model) cycleDetail() {
+	m.detail = (m.detail + 1) % 4
+}
+
+// switchDetail 指定展示档。
+func (m *Model) switchDetail(text string) {
+	parts := strings.Fields(text)
+	if len(parts) < 2 {
+		m.noteMsg("展示档：" + detailLabel(m.detail) + "（ctrl+t 循环；/detail 0-3 直接指定）")
+		return
+	}
+	idx := -1
+	switch parts[1] {
+	case "0", "简洁", "simple":
+		idx = 0
+	case "1", "标准", "standard":
+		idx = 1
+	case "2", "详细", "detail":
+		idx = 2
+	case "3", "完全", "full":
+		idx = 3
+	}
+	if idx < 0 {
+		m.errStr = "未知展示档：" + parts[1]
+		return
+	}
+	m.detail = idx
+	m.noteMsg("展示档已切到：" + detailLabel(idx))
+}
+
+// noteMsg 往消息流里追一条提示行（不参与会话落盘）。
+func (m *Model) noteMsg(s string) {
+	m.messages = append(m.messages, displayMsg{role: roleNote, text: s})
+	m.errStr = ""
+	m.renderContent()
+}
+
+// showTools 列出当前可用工具。
+func (m *Model) showTools() {
+	reg, err := kernel.Use[api.ToolRegistry](m.k, "toolRegistry")
+	if err != nil {
+		m.errStr = err.Error()
+		return
+	}
+	m.noteMsg(fmt.Sprintf("工具 %d 个：%s", len(reg.Names()), strings.Join(reg.Names(), "、")))
+}
+
+// showMemory 显示长期记忆的位置与内容。
+func (m *Model) showMemory() {
+	mem, err := kernel.Use[api.MemoryStore](m.k, "memory")
+	if err != nil || mem == nil {
+		m.errStr = "记忆插件未装载"
+		return
+	}
+	body := strings.TrimSpace(mem.Text())
+	if body == "" {
+		m.noteMsg("长期记忆为空：" + mem.Path())
+		return
+	}
+	m.noteMsg("长期记忆（" + mem.Path() + "）\n" + body)
+}
+
+// showTodo 显示当前计划清单。
+func (m *Model) showTodo() {
+	if len(m.todo) == 0 {
+		m.noteMsg("当前没有计划清单（长任务里模型会用 todo_write 维护）")
+		return
+	}
+	var b strings.Builder
+	for _, it := range m.todo {
+		mark := "[ ]"
+		switch it.Status {
+		case "done":
+			mark = "[x]"
+		case "in_progress":
+			mark = "[~]"
+		}
+		b.WriteString(mark + " " + it.Text + "\n")
+	}
+	m.noteMsg("计划清单\n" + strings.TrimRight(b.String(), "\n"))
+}
+
+// searchHistory 在会话正文里检索关键词。
+func (m *Model) searchHistory(text string) {
+	parts := strings.Fields(text)
+	if len(parts) < 2 {
+		m.errStr = "用法：/history <关键词>"
+		return
+	}
+	store, err := kernel.Use[api.SessionStore](m.k, "sessionStore")
+	if err != nil {
+		m.errStr = err.Error()
+		return
+	}
+	hits, err := store.Search(strings.Join(parts[1:], " "), 10)
+	if err != nil {
+		m.errStr = err.Error()
+		return
+	}
+	if len(hits) == 0 {
+		m.noteMsg("没有会话命中该关键词")
+		return
+	}
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("命中 %d 个会话：\n", len(hits)))
+	for _, h := range hits {
+		b.WriteString(fmt.Sprintf("  %s  %d 处  %s\n    %s\n", h.ID, h.Count, h.Title, h.Snippet))
+	}
+	m.noteMsg(strings.TrimRight(b.String(), "\n"))
+}
+
+// detailLabel 展示档的中文名。
+func detailLabel(d int) string {
+	switch d {
+	case 0:
+		return "简洁"
+	case 2:
+		return "详细"
+	case 3:
+		return "完全"
+	default:
+		return "标准"
+	}
+}
+
+// switchModel 切换主模型或辅助模型；不带参数时列出当前配置。
+func (m *Model) switchModel(text string, aux bool) {
+	mm, err := kernel.Use[api.ModelManager](m.k, "modelManager")
+	if err != nil {
+		m.errStr = "模型表未装载：" + err.Error()
+		return
+	}
+	parts := strings.Fields(text)
+	label := "主模型"
+	if aux {
+		label = "辅助模型"
+	}
+	if len(parts) < 2 {
+		m.errStr = label + "：" + func() string {
+			if aux {
+				return mm.AuxName()
+			}
+			return mm.ActiveName()
+		}() + "；可用 " + strings.Join(mm.Names(), ", ") + "（" + parts[0] + " <名字> 切换）"
+		return
+	}
+	name := parts[1]
+	if aux {
+		err = mm.SetAux(name)
+	} else {
+		err = mm.Use(name)
+	}
+	if err != nil {
+		m.errStr = err.Error()
+		return
+	}
+	m.errStr = ""
+	m.messages = append(m.messages, displayMsg{role: roleNote, text: "已切换" + label + " → " + name})
+	m.renderContent()
 }
 
 // exportSession 把当前会话导出为 Markdown 文件（/export 或 Ctrl+E）。
@@ -995,12 +1387,25 @@ func (m *Model) renderHelp(w int) string {
 		"    /new       开新会话",
 		"    /clear     清空当前会话",
 		"    /readonly  只读浏览 ⇄ 可编辑继续 切换",
+		"    /export    导出当前会话为 Markdown（Ctrl+E）",
+		"    /model     列出 / 切换主模型（/model <名字>）",
+		"    /aux       列出 / 切换辅助模型（摘要用）",
+		"    /mode      查看 / 切换权限档（read_only|standard|full）",
+		"    /detail    展示档（0 简洁 / 1 标准 / 2 详细 / 3 完全）",
+		"    /tools     列出当前可用工具",
+		"    /todo      查看计划清单",
+		"    /image     挂一张本地图片到下一句（/image <路径>，clear 清空）",
+		"    /memory    查看长期记忆",
+		"    /history   检索历史会话（/history <关键词>）",
 		"",
 		styleAccent.Render("  键位"),
 		"    Enter      发送（Shift+Enter 换行）",
+		"    Tab        循环切换权限档",
+		"    Ctrl+T     循环切换展示档",
 		"    Esc       运行中停止 / 关闭浮层",
 		"    Ctrl+C     退出",
 		"    Ctrl+P     会话列表",
+		"    Ctrl+E     导出 Markdown",
 		"    ↑/↓ 或 j/k 会话列表内移动",
 		"    d         会话列表内删除选中项",
 		"",
@@ -1078,6 +1483,8 @@ func permLabel(mode string) string {
 		return "只读"
 	case "full":
 		return "完全权限"
+	case "plan":
+		return "计划"
 	default:
 		return "标准"
 	}
@@ -1173,4 +1580,18 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// todoProgress 计划清单的一行进度，供底栏显示。
+func todoProgress(items []api.TodoItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	done := 0
+	for _, it := range items {
+		if it.Status == "done" {
+			done++
+		}
+	}
+	return fmt.Sprintf("计划 %d/%d", done, len(items))
 }

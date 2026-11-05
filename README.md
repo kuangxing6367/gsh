@@ -1,19 +1,6 @@
 # gsh
 
-DSH（DeepSeek Harness）思想的 Go 重写：**一切皆插件** 的 agent harness。核心内核零标准库依赖、单二进制；终端 TUI 前端基于 bubbletea（charmbracelet 生态，静态链接进同一个单二进制，仍是单文件分发、可自托管）。
-
-## 为什么重写
-
-| DSH (TypeScript) | gsh (Go) |
-|---|---|
-| Cordis 内核（apply/disposer/服务/事件） | `internal/kernel`：同款 Plugin 接口 + 服务注册表 + 事件总线 |
-| bundle/profile + cordis.patch.yml | 单个 `config.json` |
-| append-only session log、resume/fork | JSONL 会话文件，`List/Open/Fork` |
-| Standard/Minimal 运行模式 | `provider: echo`（离线自检）/ `openai`（真跑） |
-| pnpm monorepo + Node 依赖 | 纯标准库，`go build` 出单文件 exe |
-
-> 实测对照（同机 Windows）：DSH `npx` 冷启动 **314s**、Web 启动 ~139s 且返回 401、常驻 **310MB**、npx 缓存 **1GB/73k 文件**；gsh 冷启动 **~0.14s**、Web 启动 **~0.36s**、常驻 **~12MB**、产物 **12MB/1 文件**。
-> DSH 官方推荐 `npx` 启动本身就是坑：每次启动都要解析 86 个直接依赖的包树，不是模型加载。
+**一切皆插件** 的终端式 AI Agent。微内核只做装载、服务注册与事件分发，模型、工具、会话、提示词、界面都是插件；单二进制分发，下载即用。TUI 基于 bubbletea 静态链进同一个可执行文件。
 
 ## 用法
 
@@ -72,7 +59,7 @@ shell 解析: C:\Program Files\Git\usr\bin\bash.exe -c
 技能 (1): remote-ops
 ```
 
-### 作为组件嵌入（重写 DSH 的真正的目的）
+### 作为组件嵌入
 
 gsh 不是只能跑 CLI —— 内核是 Go 包，任何项目三行长出 agent 能力：
 
@@ -85,7 +72,7 @@ h.Serve(":8080")         // 或 h.Run(ctx, prompt, onDelta) / h.RunREPL(ctx)
 defer h.Shutdown()
 ```
 
-zcbot、AI 沙箱、运维脚本都能这样把 agent 能力塞进去，而不必拖一个 Node 运行时。
+任何 Go 项目都能这样把 agent 能力嵌进去，无需另起进程或额外运行时。
 
 ## 架构
 
@@ -94,16 +81,23 @@ harness/  高层入口：New/LoadDefaults/Serve/Run/RunREPL/RunHeadless（gsh �
 internal/
   kernel/   微内核：Plugin(Apply/Name) + Ctx(Provide/Use/Emit/On/DataDir) + 事件
   api/      跨插件接口：Session/SessionStore/LLM/Loop/ToolRegistry/Tool/Event
-  session/  会话插件：JSONL append-only + resume/fork
-  tools/    工具插件：15 个内建工具 + 安全策略 + 远程节点 + 技能加载
-  llm/      模型插件：echo mock | OpenAI 兼容（显式方言，SSE 流式 + tool_calls 聚合）
-  loop/     agent 主循环：模型 ↔ 工具，最大 24 轮保护，RunTraced 事件流
+  session/  会话插件：JSONL append-only + resume/fork + 原子 Replace
+  tools/    工具插件：内建工具 + 安全策略 + 远程节点 + 技能加载 + 审计
+  memory/   记忆插件：长期记忆文件 + remember 工具
+  hooks/    钩子插件：工具执行前后的外部命令，前钩子可拦截
+  codeindex/代码库索引：抽符号建表，code_search 查定义位置
+  subagent/ 子 agent：task 工具，独立上下文外包一段活
+  mcp/      MCP 客户端（stdio）：把外部 server 的工具并进同一张表
+  llm/      模型插件：模型表（主/辅）、SSE 流式、推理字段、采样参数、重试与计量
+  prompt/   提示词插件：内置三节 + 项目上下文 + 人格 + 动态环境注入
+  loop/     agent 主循环：模型 ↔ 工具，24 轮保护，上下文压缩，事件流
+  logx/     日志落盘（按天切分）
   ui/       REPL + headless(-e)
   web/      Web UI 插件（embed 前端 + SSE + 会话 API）
   tui/      TUI 插件（bubbletea）：终端界面，复用 loop 的流式事件
 ```
 
-插件装载序固定：`session → tools → llm → loop → web → ui`。
+插件装载序固定：`session → tools → memory → hooks → codeindex → llm → prompt → loop → subagent → mcp → web → ui`。memory / hooks / codeindex / subagent 都排在 tools 之后（要向工具注册表加条目），prompt 排在它们之后（系统提示要读工作区、权限档位、索引与长期记忆）。
 工具结果错误以 `error:` 前缀回填给模型；输出超 60KB 截断。
 
 ## 工具集与技能：范围靠配置扩展
@@ -147,9 +141,24 @@ skills/
 
 已内置示例 `skills/remote-ops/SKILL.md`：远程节点只读巡检（含判断口径：负载要对核数、分区 >85% 才处理、内存看 available）。
 
-## 安全策略（删盘事故驱动）
+## 扩展点：钩子、MCP、子 agent、代码索引
 
-bash 工具默认 **安全优先**，这是 DSH 的真实教训——它一条命令清空了用户 D 盘：
+四件事都做成插件，不用改内核：
+
+- **钩子（hooks）**：工具执行前后挂外部命令。`before_tool` 非零退出即拦截，拦截原因回填给模型；`after_tool` 的输出补注到结果末尾（超过 4KB 截断）。上下文通过 `GSH_TOOL` / `GSH_ARGS` / `GSH_RESULT` 等环境变量给到命令；参数或结果超过 4KB 时改走 `GSH_ARGS_FILE` / `GSH_RESULT_FILE` 临时文件——Windows 的环境块只有 32KB，整段塞进去子进程直接起不来。规则该长什么样只有用户自己知道（禁 `rm -rf`、必须带工单号），所以判定权交给外部。
+- **MCP（stdio）**：配置里写 server 命令，启动时拉起、握手、把它的工具并进同一张工具表，名字前缀 `mcp_<server>_<tool>`。单个 server 起不来只跳过它自己，不影响进程启动。
+- **子 agent**：`task` 工具把一段独立调研外包出去，独立上下文、独立轮数预算，只回一句结论——主会话窗口不会被子任务翻的文件内容撑爆。默认只读，需要写入时显式 `allow_write`；不允许递归派活。
+- **代码库索引**：扫仓库抽函数/类/类型定义落成索引，`code_search` 按符号名或路径查位置，拿到行号再 `read_file` 精读。索引只做定位、不含实现；系统提示里会写明当前收录规模。索引会自己发现过期（比对文件 mtime 与建表时间，30 秒节流），查不到时再强制复查一次——不会出现「文件明明在，工具却说没有」。
+
+此外两处交互侧的补充：
+
+- **多模态输入**：`-e ... -image a.png`、TUI 的 `/image <路径>`、Web 输入框附件按钮都走同一条链路——会话里只存路径，发送时才读文件编码成 data URL，历史文件不会因为图片膨胀。编码结果按「路径 + 大小 + mtime」缓存，多轮对话里同一张图不会每轮重新读盘编码。Web 上传落在 `.gsh/web/uploads`，超过 7 天或超过 512MB 自动清理旧的。
+- **语音输入（Web）**：麦克风按钮把话转成文字**填进输入框**，不自动发送。语音识别的准确率撑不起「直接喂模型」——错一个路径或标识符就得重来一轮；落成可编辑的文本后，错字只是改几个字符。浏览器不支持 Web Speech 时按钮直接不出现。
+- **历史归档**：`-archive <天数>` 把旧会话导出成按月分组的 Markdown，默认不动原文件；`-archive-prune` 才真删。
+
+## 安全策略
+
+bash 工具默认 **安全优先**：一条无约束的 shell 命令就足以造成不可逆的破坏，所以破坏性调用必须显式放行。
 
 - **致命命令永远拦截**（无论配置）：`rm -rf /`、根目录/`--no-preserve-root`、格式化/分区、`dd` 写块设备、fork bomb、关机重启、重定向覆写块设备、递归 `chmod/chown /`、清空根目录文件。
 - **受限命令默认拦截**（权限档位切到「完全权限」放行）：递归删除 `rm -r`/`rmdir -s`/`del /s`、破坏性 `git`（clean/reset --hard/checkout .）、下载脚本管道执行（`curl|sh`）、递归改权限 `chmod -R`、`find -delete`、`truncate -s 0`。
@@ -165,6 +174,8 @@ bash 工具默认 **安全优先**，这是 DSH 的真实教训——它一条�
 | `full` 完全权限 | 破坏性命令放行 | 灾难性命令仍拦截 |
 
 配置 `plugins_cfg.tools.permission: read_only|standard|full`；Web 输入区的权限按钮可随时切换，**下一次工具调用即生效**。旧字段 `allow_destructive: true` 等价于 `full`。
+
+另有一档 `plan`：权限按只读执行，同时要求模型先给出可执行方案（改哪些文件、每处改什么、风险在哪）并停下等确认。它约束的不是「能不能写」，而是「先别写，先说清楚」。
 
 拦截点在 `registry.Execute` 这个唯一执行入口，不靠每个工具自觉——新增工具漏检不存在。
 
@@ -241,23 +252,28 @@ $ ./gsh.exe -e "node=rzsh cmd=rm -rf /"
 [result] error: 命令被安全策略拦截（致命）：rm -rf 作用于根目录 / 通配 / 家目录（不可逆）
 ```
 
-## Provider 显式方言（杜绝 token 翻三倍）
+## 模型层：提示词、参数、思考与上下文
 
-DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立域名，它按 OpenAI 方言说话，token 悄悄翻三倍。gsh 永不猜：
+- **系统提示**：每轮注入内置三节（角色 / 沟通 / 运行环境）+ 工作区 `AGENTS.md` + 选中人格 + 自定义指令；工具清单、工作区、权限档位实时重算。
+- **采样与输出**：`temperature` / `top_p` / `max_tokens` / `stop` 等参数可配，未配置就不发，由对端决定默认值。
+- **深度思考**：`thinking.style` 支持 `auto` / `openai` / `anthropic` / `flag` 四种注入方式；响应里的 `reasoning_content` / `reasoning` / `thinking` / `reasoning_delta` 四种命名统一解析，走独立事件通道（TUI 折叠成一行、Web 可点击展开），**不写进会话历史**。
+- **多模型 / 子模型**：`llm.models` 配具名模型表，`active` 跑对话、`aux` 跑上下文摘要；`-model` / `/model` / `POST /api/models/use` 均可热切换，下一轮生效。
+- **上下文压缩**：历史超 `max_chars` 或 `hard_cap` 时，按轮边界切分（不拆散 tool_calls 与其结果），早期对话交给辅助模型摘要，失败自动降级为纯裁剪。摘要合并进主系统提示，出站始终只有一条 system 消息。
+- **容错与计量**：429 / 5xx 指数退避重试（尊重 `Retry-After`）、单次请求超时、工具执行超时；token 用量优先用对端上报值，缺失时本地估算并标注。
+- **密钥**：`api_key` 支持 `env:变量名`；`thinking_format` 只影响响应解析，方言判断不依赖 hostname。
 
-- `plugins_cfg.llm.base_url` 必须显式填（不靠 hostname 推断）。
-- `thinking_format` 显式声明：`none`（默认）/ `deepseek`（reasoner 模型吐 `reasoning_content`，gsh 捕获并兜底空回复）。
+配置详见文档站「配置」页。
 
 ## Web UI
 
-`./gsh.exe -web` 启动（前端 embed 进二进制，零外部静态文件），界面按 DSH 1:1 组织：
+`./gsh.exe -web` 启动（前端 embed 进二进制，零外部静态文件）：
 
 - **左侧栏**：品牌 / 新会话（`Ctrl+Alt+N`）/ 导航 / 工作区会话树（搜索、按时间筛选、右键重命名/删除、可折叠成图标栏）
 - **中栏**：标题栏 + 标准模式徽章 +「对话 / 轨迹」页签；消息流含用户气泡、markdown（标题/列表/表格/代码块复制/链接）、工具调用行（可展开看参数与结果）、状态行（完成/停止/失败）
 - **输入区**：附件上传（文本 ≤256KB，内容进上下文，回显抽成卡片）、权限三档切换、模型设置、发送/停止（`Esc` 中断）、底部统计
 - **右侧抽屉**：能力与环境——工具规格、技能列表、运行诊断（shell 候选链/解析结果/工作区/权限）
-- SSE 实时流：`tool_call → tool_result → delta(逐字) → final → done`
-- API：`POST /api/chat`（SSE）、`GET /api/state`、`GET /api/sessions`、`GET /api/session?id=`、`POST /api/session/{new,delete,rename}`、`POST /api/settings`（热更新并写回 config）、`GET/POST /api/permission`、`GET /api/workspace/browse`、`POST /api/workspace`、`POST /api/workspace/restrict`、`GET /api/tools`
+- SSE 实时流：`reason(思考) → tool_call → tool_result → delta(逐字) → usage(用量) → compacted(压缩) → final → done`
+- API：`POST /api/chat`（SSE）、`GET /api/state`、`GET /api/sessions`、`GET /api/session?id=`、`POST /api/session/{new,delete,rename}`、`POST /api/settings`（热更新并写回 config）、`GET/POST /api/permission`、`GET /api/workspace/browse`、`POST /api/workspace`、`POST /api/workspace/restrict`、`GET /api/tools`、`GET /api/models`、`POST /api/models/use`
 - loop 的 `RunTraced`：工具调用/结果/最终回复以事件回调外露，便于上层（TUI / Web / REPL）做轨迹回放
 
 ## 终端 UI（TUI）
@@ -270,7 +286,7 @@ DSH 会**按 hostname 猜推理方言**——你在 139 上的 new-api 用中立
 - **底栏**：`◆ 模式 · 模型` 徽标 → 带蓝色左边条的圆角输入框 → `模式 模型 provider` 行 → 键位提示条（`enter 发送` / `shift+enter 换行` / `ctrl+c 退出`，运行中显示 `esc 停止`）
 - **交互**：
   - Enter 发送、Shift+Enter 换行、Esc 停止当前轮 / 关闭浮层、Ctrl+C 退出
-  - `/help` 帮助浮层、`/sessions`（或 `Ctrl+P`）会话列表（↑/↓、j/k 选择，enter 打开，d 删除）、`/new`、`/clear` 开新会话或清空、`/readonly` 在「只读浏览 ⇄ 可编辑继续」间切换
+  - `/help` 帮助浮层、`/sessions`（或 `Ctrl+P`）会话列表（↑/↓、j/k 选择，enter 打开，d 删除）、`/new`、`/clear` 开新会话或清空、`/readonly` 切换只读/可编辑、`/export`（`Ctrl+E`）导出 Markdown、`/model` 与 `/aux` 列出或切换主/辅模型
   - **交互式权限确认**（标准档位下）：bash/write/edit/make_dir/move/copy/delete 等高风险工具执行前弹出 `确认 <工具> → <参数>` 浮层，按 `a` 允许 / `A` 总是允许（本进程后续同类不再询问）/ `d` 或 `esc` 拒绝；只读档位直接拦截、完全档位不询问
 - **只读浏览模式**：`-view <id>` 以只读方式进终端 UI 打开会话（顶栏标 `只读浏览`，底栏提示只读、禁发送，Ctrl+P 仍可切会话）；TUI 内随时 `/readonly` 切回可编辑继续
 - 复用内核的 `loop.RunSession`：流式 delta 与 `tool_call/tool_result` 事件经 channel 回流，逐字流与工具行实时更新——TUI 只是 loop 的新展示面，与 Web UI、REPL 对等
@@ -294,11 +310,29 @@ gsh 作为未来嵌进沙箱 / 运维体系的 harness，操作可追溯是刚�
 - 查询：`GET /api/audit?n=200`（最多 1000）；`Recent(n)` 读尾 n 行
 - **Web 展示面板**：侧栏「审计日志」进入独立视图，按 `全部 / 执行 / 拒绝 / 拦截` 筛选，显示动作徽标、工具、时间、成功/失败、会话、节点、权限、耗时、输出大小、拦截原因/错误，以及脱敏后的参数原文；打开后每 4s 轻量轮询顶部新记录，手动刷新按钮随时拉取最新
 
+## 二进制兼容性（发到别人的机器上）
+
+产物是**静态链接**的 Go 二进制：不依赖 glibc，也不依赖任何 `.so`。这一点不靠声明——`scripts/build-release.sh` 会逐个检查 Linux 产物，一旦发现 `PT_INTERP`、`DT_NEEDED` 或 `GLIBC_` 版本引用就直接构建失败。
+
+这道闸门针对一个具体事故：CI 在 ubuntu runner 上编 `linux/amd64` 属于**同平台编译**，CGO 默认为 1；一旦某个环节漏掉 `CGO_ENABLED=0`，产物就会绑死 runner 的 glibc（Ubuntu 24.04 是 2.39），拿到 CentOS 7 上执行报 `version 'GLIBC_2.34' not found`。这种错误在开发机上永远看不见，只在用户机器上炸。
+
+真正跑不起来的原因通常是另外两条：
+
+| 限制 | 边界 | 说明 |
+|---|---|---|
+| 内核版本 | Linux ≥ 3.2 | Go 1.24+ 的官方要求；CentOS 6 / RHEL 6（2.6.32）不在范围内 |
+| 内核版本（loong64） | Linux ≥ 5.19 | 龙芯平台另有要求 |
+| CPU 指令集（amd64） | `GOAMD64=v1` | 所有 64 位 x86；打包时钉死，不跟随宿主环境 |
+| CPU 指令集（arm64） | `GOARM64=v8.0` | ARMv8-A 基线 |
+| CPU 指令集（arm） | `GOARM=7` | 需要 VFPv3，即 Cortex-A 级别；ARMv5 / ARM11 跑不了 |
+
+Alpine、distroless 这类没有 glibc 的镜像**可以直接跑**——因为根本不需要 libc。反过来说，依赖 NSS 按用户名查 LDAP / SSSD 的场景不适用：CGO 关闭时 `os/user` 只读 `/etc/passwd` 与 `/etc/group`。
+
 ## Roadmap
 
-- [x] Web UI 插件（对应 DSH web 模式）
+- [x] Web UI 插件（SSE + 会话管理 + 审计面板）
 - [x] 危险命令拦截（安全优先，删盘事故驱动）
-- [x] provider 显式方言（杜绝 hostname 猜测导致 token 翻三倍）
+- [x] 推理字段显式解析（不依赖 hostname 猜测）
 - [x] 内核抽成可 import 的 `harness` 包（gsh 即组件，可嵌入）
 - [x] session resume / fork 的 CLI 入口（`-s <id>` / `--fork` / `-ls` / `-replay`）
 - [x] 事件流按会话回放（Trajectory 视图，非交互复盘）
@@ -306,9 +340,9 @@ gsh 作为未来嵌进沙箱 / 运维体系的 harness，操作可追溯是刚�
 - [x] remote 支持外部命令后端（`exec`/`args`）：已有远程 shell 工具（如 rzsh）直接接成执行后端
 - [x] shell 选择配置化（候选链 / 严格显式 / 失败报错 / 非 POSIX 方言提示 + GBK 转码）
 - [x] 工具集扩展（15 个）+ 白名单裁剪 + skills 按需加载
-- [x] 权限三档（read_only/standard/full），运行期切换，registry 统一拦截
+- [x] 权限四档（read_only/standard/full/plan），运行期切换，registry 统一拦截
 - [x] 统一工作区：shell cwd 与文件工具路径解析同源
-- [x] Web UI 1:1（会话树/轨迹/附件/权限/设置/能力面板/重命名/搜索/筛选）
+- [x] Web UI（会话树/轨迹/附件/权限/设置/能力面板/重命名/搜索/筛选）
 - [x] 终端 TUI（bubbletea，复用 loop 流式事件）
 - [x] TUI markdown 渲染（标题/列表/引用/代码块/行内码/链接，按终端单元格宽度折行）
 - [x] TUI 写类工具内嵌统一 diff（着色渲染）
@@ -318,6 +352,22 @@ gsh 作为未来嵌进沙箱 / 运维体系的 harness，操作可追溯是刚�
 - [x] TUI 交互式权限确认（标准档位高风险工具 allow / always / deny）
 - [x] 操作审计日志（落盘 + 脱敏 + 查询 API + Web 展示面板）
 - [x] 工具的 workspace 白名单（Resolve 硬边界：绝对路径 / `..` / 符号链接越界，运行期开关）
+- [x] 配置/数据锚定 exe 目录、启动横幅、日志落盘、错误退出码（P0 可用性）
+- [x] 系统提示体系（内置三节 / AGENTS.md / 人格 / 动态环境注入）
+- [x] 模型参数化、深度思考独立事件、四种推理字段兜底、重试与 token 计量
+- [x] 具名模型表 + 辅助模型（摘要）+ 三端热切换入口
+- [x] 上下文压缩（轮边界切分 / 摘要降级 / 硬上限 / 单 system 出站）
+- [x] 工具执行超时、reason/usage/compacted 事件在 TUI 与 Web 的展示
+- [x] 发布打包（8 平台）+ 静态链接校验（挡住 glibc 绑定）+ tag 触发 CI 自动发版
+- [x] 工具并行执行（同一轮多个互不依赖的调用并发跑，结果按调用顺序回填）
+- [x] 按模型窗口的 token 判定（未知窗口时退回字符阈值）
+- [x] 计划清单工具 `todo_write` + `todo` 事件（TUI 底栏进度 / Web 计划条）
+- [x] 长期记忆插件：`remember` 工具 + 记忆注入系统提示
+- [x] 联网检索 `web_search`（duckduckgo / searxng / tavily，可配代理）
+- [x] 会话全文检索（`-search` / TUI `/history` / Web 侧栏搜索走 `/api/sessions?q=`）
+- [x] TUI 运行期切档（Tab 权限 / Ctrl+T 展示档）+ 命令补至 14 条
+- [x] Web 展示档（简洁/标准/详细）、亮暗主题切换、统计胶囊（轮次/步数/首字延迟/token）
+- [x] 发布打包脚本（二进制 + 示例配置 + README）+ tag 触发的自动发版 CI
 
 ## License
 

@@ -24,6 +24,9 @@ func (fakeLoop) RunTraced(_ context.Context, _ string, _ api.StreamDelta, _ api.
 func (fakeLoop) RunSession(_ context.Context, _ string, _ string, _ api.StreamDelta, _ api.EventHandler) (string, error) {
 	return "", nil
 }
+func (fakeLoop) RunWithParts(_ context.Context, _, _ string, _ []api.ContentPart, _ api.StreamDelta, _ api.EventHandler) (string, error) {
+	return "", nil
+}
 
 func newTestModel(t *testing.T, w, h int) *Model {
 	t.Helper()
@@ -241,5 +244,97 @@ func TestReadOnlyTitleBar(t *testing.T) {
 	v := m.View()
 	if !strings.Contains(v, "只读浏览") {
 		t.Errorf("只读顶栏应含「只读浏览」，got:\n%s", v)
+	}
+}
+
+// TestCycleDetail 展示档按 0→1→2→3→0 循环，超出范围不会越界。
+func TestCycleDetail(t *testing.T) {
+	m := newTestModel(t, 100, 30)
+	m.detail = 0
+	for _, want := range []int{1, 2, 3, 0} {
+		m.cycleDetail()
+		if m.detail != want {
+			t.Fatalf("档位应为 %d，实际 %d", want, m.detail)
+		}
+	}
+}
+
+// TestDetailCommand 斜杠命令能直接指定展示档，非法值只提示不改状态。
+func TestDetailCommand(t *testing.T) {
+	m := newTestModel(t, 100, 30)
+	m.runCommand("/detail 0")
+	if m.detail != 0 {
+		t.Fatalf("应为简洁档，实际 %d", m.detail)
+	}
+	m.runCommand("/detail 3")
+	if m.detail != 3 {
+		t.Fatalf("应为完全档，实际 %d", m.detail)
+	}
+	m.runCommand("/detail 9")
+	if m.detail != 3 {
+		t.Fatalf("非法参数不应改档，实际 %d", m.detail)
+	}
+	if m.errStr == "" {
+		t.Fatal("非法参数应给出错误提示")
+	}
+}
+
+// TestToolLineHiddenInSimpleMode 简洁档不渲染参数与结果正文。
+func TestToolLineHiddenInSimpleMode(t *testing.T) {
+	dm := displayMsg{
+		role:   roleTool,
+		name:   "bash",
+		args:   "go test ./...",
+		state:  "done",
+		detail: "ok  gsh/internal/tools",
+		note:   "(20)",
+	}
+	simple := renderToolLine(dm, 100, 0)
+	if strings.Contains(simple, "go test") || strings.Contains(simple, "ok  gsh") {
+		t.Fatalf("简洁档不应显示参数/正文: %q", simple)
+	}
+	standard := renderToolLine(dm, 100, 1)
+	if !strings.Contains(standard, "go test") {
+		t.Fatalf("标准档应显示参数: %q", standard)
+	}
+	if !strings.Contains(standard, "ok  gsh") {
+		t.Fatalf("标准档应显示结果正文: %q", standard)
+	}
+}
+
+// TestReasonHiddenInSimpleMode 简洁档不显示思考行。
+func TestReasonHiddenInSimpleMode(t *testing.T) {
+	if got := renderReasonLine("想一想", 80, 0); got != "" {
+		t.Fatalf("简洁档应隐藏思考: %q", got)
+	}
+	if got := renderReasonLine("想一想", 80, 1); !strings.Contains(got, "思考") {
+		t.Fatalf("标准档应显示折叠思考: %q", got)
+	}
+}
+
+// TestTodoProgress 底栏进度只统计 done。
+func TestTodoProgress(t *testing.T) {
+	items := []api.TodoItem{
+		{Text: "a", Status: "done"},
+		{Text: "b", Status: "in_progress"},
+		{Text: "c", Status: "pending"},
+	}
+	if got := todoProgress(items); got != "计划 1/3" {
+		t.Fatalf("进度文案错误: %q", got)
+	}
+	if got := todoProgress(nil); got != "" {
+		t.Fatalf("空清单不应有进度: %q", got)
+	}
+}
+
+// TestTodoEventUpdatesModel todo 事件到达后模型持有清单（底栏据此显示进度）。
+func TestTodoEventUpdatesModel(t *testing.T) {
+	m := newTestModel(t, 100, 30)
+	m.handleStream(streamEvent{kind: "todo", todo: []api.TodoItem{{Text: "写代码", Status: "in_progress"}}})
+	if len(m.todo) != 1 {
+		t.Fatalf("清单未更新: %d", len(m.todo))
+	}
+	if !strings.Contains(m.renderFooter(100), "计划 0/1") {
+		t.Fatal("底栏应显示计划进度")
 	}
 }

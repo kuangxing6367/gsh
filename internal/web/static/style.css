@@ -643,6 +643,16 @@ svg { display: block; }
   text-overflow: ellipsis;
 }
 .statusRow .detail:hover { white-space: normal; overflow-wrap: anywhere; }
+.statusRow[data-kind="reason"] .dot { background: var(--brand-blue); opacity: .65; }
+.statusRow[data-kind="reason"] .detail { cursor: pointer; }
+.statusRow[data-expanded="1"] { align-items: flex-start; }
+.statusRow[data-expanded="1"] .detail {
+  white-space: pre-wrap;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
@@ -1418,4 +1428,121 @@ svg { display: block; }
   color: var(--label-caption);
   font-size: 12.5px;
   line-height: 1.6;
+}
+
+/* ---------- 展示档：控制过程信息的可见度 ---------- */
+/* 简洁档隐藏工具行与状态行，只留对话正文；详细档把工具详情默认展开。 */
+#frame[data-detail="0"] .toolRow,
+#frame[data-detail="0"] .toolDetail,
+#frame[data-detail="0"] .statusRow { display: none; }
+#frame[data-detail="2"] .toolDetail { display: block; }
+#frame[data-detail="2"] .toolRow { cursor: default; }
+
+/* ---------- 计划清单条 ---------- */
+.todoBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  max-width: var(--content-max);
+  margin: 0 auto 8px;
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  background: var(--bg-layer-1);
+  border: 1px solid var(--border-l1);
+  font-size: 12px;
+  color: var(--label-tertiary);
+}
+.todoBar[hidden] { display: none; }
+.todoHead {
+  color: var(--label-secondary);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.todoItem { color: var(--label-tertiary); }
+.todoItem[data-status="in_progress"] { color: var(--brand-blue); }
+.todoItem[data-status="done"] { color: var(--label-caption); text-decoration: line-through; }
+
+/* ---------- 侧栏检索片段 ---------- */
+.convSnippet {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--label-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.convItem { flex-wrap: wrap; }
+
+/* ---------- 亮色主题 ---------- */
+html[data-theme="light"] {
+  --bg-base: rgb(250, 250, 251);
+  --bg-layer-1: rgb(255, 255, 255);
+  --bg-layer-2: rgb(244, 245, 247);
+  --bg-layer-3: rgb(236, 238, 241);
+  --sidebar-fill: rgb(245, 246, 248);
+  --nav-active: rgb(228, 232, 238);
+
+  --border-l1: rgba(15, 20, 30, 0.08);
+  --border-l2: rgba(15, 20, 30, 0.14);
+  --border-l3: rgba(15, 20, 30, 0.2);
+  --border-l4: rgba(15, 20, 30, 0.28);
+
+  --label-primary: rgb(24, 27, 32);
+  --label-secondary: rgb(52, 58, 66);
+  --label-tertiary: rgb(92, 99, 110);
+  --label-caption: rgb(128, 135, 146);
+  --label-dimmed: rgb(186, 191, 199);
+
+  --hover: rgba(15, 20, 30, 0.05);
+  --active: rgba(15, 20, 30, 0.09);
+  --link: rgb(37, 99, 235);
+  --brand-blue: rgb(37, 108, 235);
+
+  --bubble: rgb(240, 242, 245);
+  --input-major: rgb(255, 255, 255);
+  --code-bg: rgb(245, 246, 248);
+  --code-banner: rgb(236, 238, 241);
+  --inline-code: rgb(238, 240, 243);
+
+  --error: rgb(200, 40, 40);
+  --success: rgb(22, 145, 70);
+  --warn: rgb(180, 110, 10);
+}
+
+html[data-theme="light"] body { background: var(--bg-base); color: var(--label-primary); }
+html[data-theme="light"] .convItem[data-active="true"] { background: var(--nav-active); }
+
+/* 图片附件：缩略图直接进 chip，用户能一眼确认发出去的是哪张图。 */
+.attachChipImg { padding: 3px 8px 3px 3px; }
+.attachThumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  object-fit: cover;
+  border: 1px solid var(--border-l3);
+  flex-shrink: 0;
+}
+
+/* 完全档：工具细节常开、思考全文展开，与终端 Ctrl+T 的第四档对齐。 */
+#frame[data-detail="3"] .toolDetail { display: block; }
+#frame[data-detail="3"] .toolRow { cursor: default; }
+#frame[data-detail="3"] .statusRow[data-kind="reason"] { align-items: flex-start; }
+#frame[data-detail="3"] .statusRow[data-kind="reason"] .detail {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 录音中：按钮转红并呼吸，用户能一眼确认麦克风是开着的。 */
+#micBtn[data-listening="true"] {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+}
+#micBtn[data-listening="true"] svg { animation: micPulse 1.4s ease-in-out infinite; }
+@keyframes micPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }

@@ -22,6 +22,7 @@ type ListDirTool struct{ ws *Workspace }
 func (t *ListDirTool) Spec() api.ToolSpec {
 	return api.ToolSpec{
 		Name:        "list_dir",
+		ReadOnly:    true,
 		Description: "List directory entries with type/size/mtime. Prefer this over `ls` for structured output. Use glob for pattern matching across subdirs.",
 		Parameters: map[string]any{
 			"type": "object",

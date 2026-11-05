@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -67,10 +68,17 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 	p.reg.guard = guard
 	// 权限是运行期状态：Web UI 切档后下一次工具调用立刻按新档位执行。
 	ctx.Provide("guard", guard)
+	ctx.SetRuntime("permission", perm.String())
+	// 权限档位可在运行期切换：界面切档后提示词里的档位说明也要跟着变。
+	ctx.Provide("permission", api.PermissionSwitch(&permSwitch{guard: guard, ctx: ctx}))
 
-	ws := NewWorkspace(".")
+	// 工作区默认锚定程序目录（而非当前工作目录），配置里的相对路径也相对它解析。
+	ws := NewWorkspace(ctx.BaseDir())
 	if cfg != nil {
 		if v, ok := cfg["workspace"].(string); ok && v != "" {
+			if !filepath.IsAbs(v) {
+				v = filepath.Join(ctx.BaseDir(), v)
+			}
 			if err := ws.Set(v); err != nil {
 				fmt.Fprintf(os.Stderr, "[tools] 警告：workspace %q 不可用（%v），改用 %s\n", v, err, ws.Root())
 			}
@@ -147,11 +155,14 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 		}
 	}
 
-	// 技能：目录里放 SKILL.md 就有能力，不用改代码。
-	skillDir := "skills"
+	// 技能：目录里放 SKILL.md 就有能力，不用改代码。相对路径锚定程序目录。
+	skillDir := filepath.Join(ctx.BaseDir(), "skills")
 	if cfg != nil {
 		if v, ok := cfg["skills"].(map[string]any); ok {
 			if d, ok := v["dir"].(string); ok && d != "" {
+				if !filepath.IsAbs(d) {
+					d = filepath.Join(ctx.BaseDir(), d)
+				}
 				skillDir = d
 			}
 		}
@@ -164,8 +175,13 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 	// 技能目录也是运行期能力：Web 侧的「工具/技能」面板要能列出它们。
 	ctx.Provide("skills", skills)
 
+	// 计划清单：工具与界面共享同一份内存状态。
+	todo := &todoStore{}
+	ctx.Provide("todo", api.TodoStore(todo))
+
 	all := []api.Tool{
 		bt,
+		&TodoTool{store: todo},
 		&ReadFileTool{ws: ws},
 		&WriteFileTool{ws: ws},
 		&EditFileTool{ws: ws},
@@ -181,6 +197,13 @@ func (p *Plugin) Apply(ctx *kernel.Ctx) error {
 	}
 	if skills.Len() > 0 {
 		all = append(all, &ListSkillsTool{reg: skills}, &UseSkillTool{reg: skills})
+	}
+	// 联网检索需显式配置后端（默认 duckduckgo 也要配 proxy 才在多数网络环境可用）。
+	// 没配就不注册：给模型一个注定失败的工具比不给更糟。
+	if wc, ok := cfg["websearch"].(map[string]any); ok {
+		if ws := newWebSearch(wc); ws != nil {
+			all = append(all, ws)
+		}
 	}
 
 	// 工具集可裁剪：enabled 非空时作白名单，disabled 永远排除。
@@ -305,6 +328,13 @@ func (r *registry) SetApprover(a api.ToolApprover) {
 	r.mu.Unlock()
 }
 
+// HasApprover 实现 api.ToolRegistry。审批弹窗共用一路输入，必须串行执行。
+func (r *registry) HasApprover() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.approver != nil
+}
+
 // riskyTools 标准档位下执行前需确认的工具（破坏性 / 写类）。
 // 只读工具（read/glob/grep/list_dir）与网络读取（web_fetch/http_request）不在此列。
 var riskyTools = map[string]bool{
@@ -358,17 +388,21 @@ func (r *registry) Execute(ctx context.Context, call api.ToolCall) api.ToolResul
 		r.audit.recordFromCall(ctx, call, node, "denied", "unknown tool: "+call.Name, perm, false, nil, 0, time.Since(start).Milliseconds())
 		return api.ToolResult{CallID: call.ID, Name: call.Name, Content: "unknown tool: " + call.Name, IsError: true}
 	}
-	if reason := r.guard.Check(call.Name); reason != "" {
+	// 只读判定看工具自己的声明：没声明的按「可能写」处理，
+	// 这样新加的工具和 MCP 接进来的工具都不会成为只读模式下的写入通道。
+	if reason := r.guard.CheckTool(call.Name, t.Spec().ReadOnly); reason != "" {
 		r.audit.recordFromCall(ctx, call, node, "blocked", reason, perm, false, nil, 0, time.Since(start).Milliseconds())
 		return api.ToolResult{CallID: call.ID, Name: call.Name, Content: "error: " + reason, IsError: true}
 	}
 	// 交互式确认：标准档位下、高风险工具、且用户没选过「总是放行」时才问。
-	if r.approver != nil && r.needsApproval(call.Name) {
-		r.mu.RLock()
-		always := r.alwaysAllowed[call.Name]
-		r.mu.RUnlock()
+	r.mu.RLock()
+	approver := r.approver
+	alwaysNow := r.alwaysAllowed[call.Name]
+	r.mu.RUnlock()
+	if approver != nil && r.needsApproval(call.Name) {
+		always := alwaysNow
 		if !always {
-			dec, aerr := r.approver.Approve(ctx, call)
+			dec, aerr := approver.Approve(ctx, call)
 			if aerr != nil {
 				r.audit.recordFromCall(ctx, call, node, "denied", "user cancelled: "+aerr.Error(), perm, false, nil, 0, time.Since(start).Milliseconds())
 				return api.ToolResult{CallID: call.ID, Name: call.Name, Content: "error: 用户取消了该工具调用", IsError: true}
@@ -457,4 +491,41 @@ func argStrs(m map[string]any, key string) []string {
 		}
 	}
 	return out
+}
+
+// permSwitch 把 Guard 暴露成 api.PermissionSwitch，并在切档时同步运行时状态。
+type permSwitch struct {
+	guard *Guard
+	ctx   *kernel.Ctx
+}
+
+// Mode 返回对外展示的档位名。plan 是把只读档加了「先出方案」的语义，
+// 底层权限仍是只读，但对外必须报 plan——否则界面显示「只读」，
+// 用户以为自己只切了只读，实际模型被要求先给方案，两边认知对不上。
+func (p *permSwitch) Mode() string {
+	if v := p.ctx.Runtime("planMode"); v != nil {
+		if b, ok := v.(bool); ok && b {
+			return "plan"
+		}
+	}
+	return p.guard.Mode().String()
+}
+
+func (p *permSwitch) SetMode(name string) error {
+	// plan 是「只读 + 先出计划」的组合档：权限按只读执行，
+	// 同时把 planMode 打开，让系统提示要求模型先给方案再等确认。
+	if strings.EqualFold(strings.TrimSpace(name), "plan") {
+		p.guard.Set(PermReadOnly)
+		p.ctx.SetRuntime("permission", PermReadOnly.String())
+		p.ctx.SetRuntime("planMode", true)
+		return nil
+	}
+	v, err := ParsePerm(name)
+	if err != nil {
+		return err
+	}
+	p.guard.Set(v)
+	p.ctx.SetRuntime("permission", v.String())
+	p.ctx.SetRuntime("planMode", false)
+	return nil
 }

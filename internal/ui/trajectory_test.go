@@ -13,9 +13,10 @@ type fakeSess struct {
 	msgs []api.Message
 }
 
-func (f fakeSess) ID() string                       { return f.id }
-func (f fakeSess) Append(api.Message) error         { return nil }
-func (f fakeSess) Messages() []api.Message          { return f.msgs }
+func (f fakeSess) ID() string                  { return f.id }
+func (f fakeSess) Append(api.Message) error    { return nil }
+func (f fakeSess) Messages() []api.Message     { return f.msgs }
+func (f fakeSess) Replace([]api.Message) error { return nil }
 
 func TestRenderTrajectory(t *testing.T) {
 	sess := fakeSess{
@@ -33,10 +34,10 @@ func TestRenderTrajectory(t *testing.T) {
 
 	checks := map[string]string{
 		"会话 id 标题": "20260101-000000-ab12",
-		"用户块标记":   "◆ 你",
+		"用户块标记":    "◆ 你",
 		"用户问题":     "帮我写个文件",
-		"工具调用名":   "writetest",
-		"diff 新增行":  "+hi",
+		"工具调用名":    "writetest",
+		"diff 新增行": "+hi",
 		"助手标记":     "◇ 助手",
 		"助手文本":     "已写好 a.txt",
 	}

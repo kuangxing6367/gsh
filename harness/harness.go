@@ -1,8 +1,6 @@
 // Package harness 把 gsh 从「一个 CLI 应用」降维成「一个可嵌入的系统组件」。
 //
-// 这是重写 DSH 的真正目的：DSH 是一个跑不起来的 Node 应用（冷启动 5 分钟、
-// 1GB 依赖、MIT 只读投放）；gsh 的内核是 Go 包，任何项目——
-// zcbot、AI 沙箱、你自己的运维脚本——都能 import 进来，三行代码长出 agent 能力：
+// gsh 的内核是 Go 包，任何项目都能 import 进来，三行代码长出 agent 能力：
 //
 //	h := harness.New(cfg)
 //	h.LoadDefaults()           // 装载默认插件集
@@ -13,12 +11,21 @@ package harness
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 
 	"gsh/internal/api"
+	"gsh/internal/codeindex"
+	"gsh/internal/hooks"
 	"gsh/internal/kernel"
 	"gsh/internal/llm"
 	"gsh/internal/loop"
+	"gsh/internal/mcp"
+	"gsh/internal/memory"
+	"gsh/internal/prompt"
 	"gsh/internal/session"
+	"gsh/internal/subagent"
 	"gsh/internal/tools"
 	"gsh/internal/tui"
 	"gsh/internal/ui"
@@ -37,13 +44,20 @@ func New(cfg *kernel.Config) *Harness {
 	return &Harness{k: k}
 }
 
-// LoadDefaults 装载默认插件集：session → tools → llm → loop → web → ui。
+// LoadDefaults 装载默认插件集。
+// prompt 必须排在 tools 之后：它要读 tools 发布的工作区与权限档位。
 func (h *Harness) LoadDefaults() error {
 	loaders := []func(*kernel.Kernel) error{
 		session.RegisterKernel,
 		tools.RegisterKernel,
+		memory.RegisterKernel,    // 依赖 tools 的注册表（remember 工具）
+		hooks.RegisterKernel,     // 工具执行前后的外部钩子
+		codeindex.RegisterKernel, // 依赖 tools 的工作区与注册表
 		llm.RegisterKernel,
+		prompt.RegisterKernel,
 		loop.RegisterKernel,
+		subagent.RegisterKernel, // 向注册表加 task 工具，需 prompt 已就绪
+		mcp.RegisterKernel,      // 把外部 MCP server 的工具并进同一张表
 		web.RegisterKernel,
 		ui.RegisterKernel,
 	}
@@ -69,6 +83,27 @@ func (h *Harness) Run(ctx context.Context, prompt string, onDelta api.StreamDelt
 		return "", err
 	}
 	return lp.Run(ctx, prompt, onDelta)
+}
+
+// RunWithImages 带图片执行一轮（headless）。图片按本地路径读取，
+// 路径不存在时直接报错——静默忽略图片会让用户以为模型看过了。
+func (h *Harness) RunWithImages(ctx context.Context, prompt, sessionID string, images []string, onDelta api.StreamDelta) (string, error) {
+	lp, err := Use[api.Loop](h, "loop")
+	if err != nil {
+		return "", err
+	}
+	parts := make([]api.ContentPart, 0, len(images))
+	for _, p := range images {
+		if _, serr := os.Stat(p); serr != nil {
+			return "", fmt.Errorf("图片不存在: %s: %w", p, serr)
+		}
+		abs, aerr := filepath.Abs(p)
+		if aerr != nil {
+			abs = p
+		}
+		parts = append(parts, api.ContentPart{Type: "image", Path: abs})
+	}
+	return lp.RunWithParts(ctx, sessionID, prompt, parts, onDelta, nil)
 }
 
 // Serve 启动 Web UI 服务（阻塞），addr 为空则用配置中的地址。
@@ -122,6 +157,15 @@ func (h *Harness) ListSessions() ([]api.SessionMeta, error) {
 		return nil, err
 	}
 	return store.ListMeta()
+}
+
+// SearchSessions 在会话正文里检索关键词，供 CLI / TUI / Web 共用。
+func (h *Harness) SearchSessions(query string, limit int) ([]api.SessionHit, error) {
+	store, err := Use[api.SessionStore](h, "sessionStore")
+	if err != nil {
+		return nil, err
+	}
+	return store.Search(query, limit)
 }
 
 // ForkSession 以指定会话为蓝本派生新会话，返回新会话 id。
